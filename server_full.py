@@ -1,34 +1,27 @@
-# server_full.py – MyAuktion KI-Artikelaufnahme-System (FINAL)
-# Features:
-# - Upload + sofortige Vorschau (Frontend)
-# - Mehrere Fotos pro Artikel
-# - Hintergrund-KI (OpenAI Vision) -> Titel, Beschreibung, Kategorie, Listenpreis
-# - Rufpreis = 20% vom Listenpreis, IMMER auf ganze € aufrunden
-# - Bei Upload wird KI automatisch neu gestartet (auch bei Foto 2/3/…)
-# - Polling kann auf "genau dieses Foto" warten (filename)
-# - Kein KI-Fallback-Text: bei Fehler -> ki_source="failed"
-# - Live-Check Artikelnummer: /api/check_artnr
-# - Foto löschen: /api/delete_image
-# - CSV Export (inkl. Kategorie)
-# - Admin-Only Budget/Flags (Token geschützt): /api/admin/budget /api/admin/articles
+# server_full.py – MyAuktion KI-Artikelaufnahme-System
+# FINAL (1x KI-Versuch, kein Fallback, kein Retry)
 #
-# Start:
-#   python -m uvicorn server_full:app --host 0.0.0.0 --port 5050
+# Features:
+# - Upload + sofortige Vorschau
+# - Hintergrund-KI (OpenAI Vision) -> Titel, Beschreibung, retail_price
+# - rufpreis = 20% von retail_price (nur wenn KI ok)
+# - KEIN Fallback-Text, KEIN Dauerversuch
+# - /api/describe für manuelle KI-Neuberechnung
+# - Admin API + CSV Export (ohne Einheit)
 
-from __future__ import annotations
-
-from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, Request
+from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from pathlib import Path
 from PIL import Image, ImageOps
-import io, json, time, csv, math, os
-from typing import Any, Dict, Optional, Tuple
+import io, json, time, csv
+import math
 
 app = FastAPI()
 
+# CORS (für Handy/Web)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -39,51 +32,31 @@ app.add_middleware(
 
 BASE_DIR = Path(__file__).resolve().parent
 
+# Upload-Ordner
 RAW_DIR = BASE_DIR / "uploads" / "raw"
 PROCESSED_DIR = BASE_DIR / "uploads" / "processed"
-EXPORT_DIR = BASE_DIR / "export"
 RAW_DIR.mkdir(parents=True, exist_ok=True)
 PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+
+# Export
+EXPORT_DIR = BASE_DIR / "export"
 EXPORT_DIR.mkdir(parents=True, exist_ok=True)
-
 EXPORT_CSV = EXPORT_DIR / "artikel_export.csv"
-USAGE_JSON = EXPORT_DIR / "ki_usage.json"
 
-# Admin-Schutz (frei wählbar, NICHT OpenAI-Key)
-ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "").strip()  # leer => Admin offen (nur für Tests)
-DEFAULT_BUDGET_EUR = float((os.getenv("KI_BUDGET_EUR", "10") or "10").replace(",", "."))
-COST_PER_SUCCESS_CALL_EUR = float((os.getenv("KI_COST_PER_SUCCESS_CALL_EUR", "0.003") or "0.003").replace(",", "."))
-
+# Static (damit /static/... funktioniert)
 app.mount("/static", StaticFiles(directory=str(BASE_DIR)), name="static")
 
 
-# ----------------------------
-# Admin Auth
-# ----------------------------
-def _is_admin(request: Request) -> bool:
-    if not ADMIN_TOKEN:
-        return True
-    token = (request.headers.get("X-Admin-Token", "") or "").strip()
-    if not token:
-        token = (request.query_params.get("token", "") or "").strip()
-    return token == ADMIN_TOKEN
+# ------------------------------------------------------------
+# META JSON
+# ------------------------------------------------------------
 
-
-def _admin_guard(request: Request) -> Optional[JSONResponse]:
-    if _is_admin(request):
-        return None
-    return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
-
-
-# ----------------------------
-# Meta JSON
-# ----------------------------
-def _default_meta(artikelnr: str) -> Dict[str, Any]:
+def _default_meta(artikelnr: str) -> dict:
+    # KEIN Fallback-Text. Leere Felder wenn KI nicht läuft.
     return {
-        "artikelnr": str(artikelnr),
+        "artikelnr": artikelnr,
         "titel": "",
         "beschreibung": "",
-        "kategorie": "",
         "retail_price": 0.0,
         "rufpreis": 0.0,
         "lagerort": "",
@@ -91,110 +64,128 @@ def _default_meta(artikelnr: str) -> Dict[str, Any]:
         "mitarbeiter": "",
         "lagerstand": 1,
         "reviewed": False,
-        "ki_source": "",          # pending | realtime | failed | ""
-        "ki_last_error": "",
-        "ki_runtime_ms": 0,
+        "ki_source": "",
         "batch_done": False,
         "last_image": "",
-        "created_at": int(time.time()),
-        "updated_at": int(time.time()),
+        "ki_runtime_ms": 0,
+        "ki_last_error": "",
     }
 
 
-def _meta_path(artikelnr: str) -> Path:
-    return RAW_DIR / f"{artikelnr}.json"
-
-
-def _load_meta_json(artikelnr: str) -> Dict[str, Any]:
-    p = _meta_path(artikelnr)
-    data: Dict[str, Any] = {}
-    if p.exists():
+def _load_meta_json(artikelnr: str) -> dict:
+    meta_path = RAW_DIR / f"{artikelnr}.json"
+    if meta_path.exists():
         try:
-            data = json.loads(p.read_text("utf-8"))
+            data = json.loads(meta_path.read_text("utf-8"))
         except Exception:
             data = {}
+    else:
+        data = {}
+
     merged = _default_meta(artikelnr)
     merged.update(data)
     return merged
 
 
-def _save_meta_json(artikelnr: str, data: Dict[str, Any]) -> None:
-    data["updated_at"] = int(time.time())
-    _meta_path(artikelnr).write_text(json.dumps(data, ensure_ascii=False, indent=2), "utf-8")
+def _save_meta_json(artikelnr: str, data: dict):
+    path = RAW_DIR / f"{artikelnr}.json"
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), "utf-8")
+    return path
 
 
-# ----------------------------
-# KI Usage (Budget Anzeige – Schätzung)
-# ----------------------------
-def _load_usage() -> Dict[str, Any]:
-    if USAGE_JSON.exists():
+# ------------------------------------------------------------
+# KI (OpenAI Vision) – GENAU 1 VERSUCH, KEIN FALLBACK, KEIN RETRY
+# ------------------------------------------------------------
+
+def _run_meta_once(artikelnr: str, img_path: Path):
+    """
+    Führt GENAU EINEN KI-Versuch aus.
+    Kein Fallback, kein Retry.
+    """
+    try:
+        import ki_engine_openai as ki_engine
+    except Exception as e:
+        print("[KI] Importfehler:", e)
+        return None, False, str(e), 0
+
+    start = time.time()
+    try:
+        meta = ki_engine.generate_meta(str(img_path), str(artikelnr))
+        runtime_ms = int((time.time() - start) * 1000)
+
+        # Wenn kein sinnvoller Output -> Fehler
+        if not meta or not meta.get("title"):
+            return None, False, "empty_result", runtime_ms
+
+        return meta, True, "", runtime_ms
+
+    except Exception as e:
+        runtime_ms = int((time.time() - start) * 1000)
+        print("[KI] Fehler:", e)
+        return None, False, str(e), runtime_ms
+
+
+def _run_meta_background(artikelnr: str, img_path: Path):
+    """
+    Läuft im Hintergrund.
+    Speichert Titel, Beschreibung, retail_price und rufpreis=20% – NUR wenn KI ok.
+    """
+    print(f"[BG-KI] Starte Hintergrund-KI für Artikel {artikelnr}")
+
+    meta, ki_ok, ki_error, runtime_ms = _run_meta_once(artikelnr, img_path)
+
+    mj = _load_meta_json(artikelnr)
+    mj["ki_runtime_ms"] = runtime_ms
+    mj["last_image"] = img_path.name
+
+    if ki_ok:
+        mj["titel"] = (meta.get("title") or "").strip()
+        mj["beschreibung"] = (meta.get("description") or "").strip()
+
+        retail = meta.get("retail_price", 0.0)
         try:
-            u = json.loads(USAGE_JSON.read_text("utf-8"))
-        except Exception:
-            u = {}
+            retail_f = float(retail)
+        except (TypeError, ValueError):
+            retail_f = 0.0
+
+        mj["retail_price"] = round(retail_f, 2)
+        mj["rufpreis"] = float(math.ceil(retail_f * 0.20))
+
+        mj["ki_source"] = "realtime"
+        mj["batch_done"] = True
+        mj["reviewed"] = False
+        mj["ki_last_error"] = ""
+
     else:
-        u = {}
-    u.setdefault("budget_eur", DEFAULT_BUDGET_EUR)
-    u.setdefault("cost_per_success_call_eur", COST_PER_SUCCESS_CALL_EUR)
-    u.setdefault("success_calls", 0)
-    u.setdefault("failed_calls", 0)
-    u.setdefault("last_error", "")
-    u.setdefault("last_success_at", 0)
-    u.setdefault("spent_est_eur", 0.0)
-    return u
+        # KEIN Fallback, KEIN Default. Felder bleiben wie sie sind (leer oder manuell).
+        mj["ki_last_error"] = ki_error or "ki_failed"
+        mj["ki_source"] = "failed"
+        mj["batch_done"] = True  # fertig = ja, aber KI fehlgeschlagen
+
+    _save_meta_json(artikelnr, mj)
+    _rebuild_csv_export()
+
+    print(f"[BG-KI] Fertig für Artikel {artikelnr} – ki_ok={ki_ok}")
 
 
-def _save_usage(u: Dict[str, Any]) -> None:
-    USAGE_JSON.write_text(json.dumps(u, ensure_ascii=False, indent=2), "utf-8")
+# ------------------------------------------------------------
+# CSV EXPORT (ohne Einheit)
+# ------------------------------------------------------------
 
-
-def _usage_success() -> None:
-    u = _load_usage()
-    u["success_calls"] = int(u.get("success_calls", 0)) + 1
-    u["spent_est_eur"] = round(float(u.get("success_calls", 0)) * float(u.get("cost_per_success_call_eur", COST_PER_SUCCESS_CALL_EUR)), 4)
-    u["last_success_at"] = int(time.time())
-    u["last_error"] = ""
-    _save_usage(u)
-
-
-def _usage_fail(err: str) -> None:
-    u = _load_usage()
-    u["failed_calls"] = int(u.get("failed_calls", 0)) + 1
-    u["last_error"] = (err or "")[:250]
-    _save_usage(u)
-
-
-# ----------------------------
-# CSV Export
-# ----------------------------
-CSV_FIELDS = [
-    "ArtikelNr",
-    "Menge",
-    "Kategorie",
-    "Bezeichnung",
-    "Beschreibung",
-    "Rufpreis",
-    "Lagerstand",
-    "Lagerort",
-    "Einlieferer",
-    "Mitarbeiter",
-    "RetailPreis",
-]
-
-
-def _rebuild_csv_export() -> None:
+def _rebuild_csv_export():
     rows = []
-    for meta_file in RAW_DIR.glob("*.json"):
+
+    for meta_path in RAW_DIR.glob("*.json"):
         try:
-            d = json.loads(meta_file.read_text("utf-8"))
+            d = json.loads(meta_path.read_text("utf-8"))
         except Exception:
             continue
 
-        nr = str(d.get("artikelnr") or meta_file.stem)
+        nr = d.get("artikelnr") or meta_path.stem
+
         rows.append({
             "ArtikelNr": nr,
             "Menge": 1,
-            "Kategorie": d.get("kategorie", "") or "",
             "Bezeichnung": d.get("titel", "") or "",
             "Beschreibung": d.get("beschreibung", "") or "",
             "Rufpreis": d.get("rufpreis", 0.0) or 0.0,
@@ -205,16 +196,29 @@ def _rebuild_csv_export() -> None:
             "RetailPreis": d.get("retail_price", 0.0) or 0.0,
         })
 
-    def _sort_key(r):
-        try:
-            return int(r["ArtikelNr"])
-        except Exception:
-            return r["ArtikelNr"]
-
-    rows.sort(key=_sort_key)
+    # Sort
+    try:
+        rows.sort(key=lambda r: int(r["ArtikelNr"]))
+    except Exception:
+        rows.sort(key=lambda r: str(r["ArtikelNr"]))
 
     with EXPORT_CSV.open("w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=CSV_FIELDS, delimiter=";")
+        w = csv.DictWriter(
+            f,
+            fieldnames=[
+                "ArtikelNr",
+                "Menge",
+                "Bezeichnung",
+                "Beschreibung",
+                "Rufpreis",
+                "Lagerstand",
+                "Lagerort",
+                "Einlieferer",
+                "Mitarbeiter",
+                "RetailPreis",
+            ],
+            delimiter=";"
+        )
         w.writeheader()
         for r in rows:
             w.writerow(r)
@@ -222,115 +226,33 @@ def _rebuild_csv_export() -> None:
     print("[CSV] Export aktualisiert:", EXPORT_CSV)
 
 
-# ----------------------------
-# KI (1 Versuch, kein Fallback, mit Kontext fürs 2. Foto)
-# ----------------------------
-def _run_meta_once(artikelnr: str, img_path: Path) -> Tuple[Optional[Dict[str, Any]], bool, str, int]:
-    """Return (meta, ok, error, runtime_ms)"""
-    try:
-        import ki_engine_openai as ki_engine
-    except Exception as e:
-        err = f"import_error: {e}"
-        print("[KI] Importfehler:", e)
-        return None, False, err, 0
+# ------------------------------------------------------------
+# ROUTES
+# ------------------------------------------------------------
 
-    current = _load_meta_json(artikelnr)
-
-    start = time.time()
-    try:
-        meta = ki_engine.generate_meta(str(img_path), str(artikelnr), context=current)
-        runtime_ms = int((time.time() - start) * 1000)
-
-        if not meta:
-            return None, False, "ki_failed", runtime_ms
-
-        title = (meta.get("title") or "").strip()
-        desc = (meta.get("description") or "").strip()
-        cat = (meta.get("category") or "").strip()
-
-        try:
-            retail = float(meta.get("retail_price", 0) or 0)
-        except Exception:
-            retail = 0.0
-
-        # OK nur wenn Titel + (Beschreibung ODER Preis)
-        if not title or (not desc and retail <= 0):
-            return None, False, "invalid_ki_result", runtime_ms
-
-        meta["title"] = title
-        meta["description"] = desc
-        meta["category"] = cat
-        meta["retail_price"] = retail
-        return meta, True, "", runtime_ms
-
-    except Exception as e:
-        runtime_ms = int((time.time() - start) * 1000)
-        err = str(e)
-        print("[KI] Fehler:", e)
-        return None, False, err, runtime_ms
-
-
-def _apply_ki_to_meta(mj: Dict[str, Any], meta: Dict[str, Any]) -> None:
-    mj["titel"] = meta.get("title", "").strip()
-    mj["beschreibung"] = meta.get("description", "").strip()
-    mj["kategorie"] = meta.get("category", "").strip()
-
-    retail_f = float(meta.get("retail_price", 0.0) or 0.0)
-    mj["retail_price"] = round(retail_f, 2)
-
-    # Rufpreis: 20% auf ganze € aufrunden
-    mj["rufpreis"] = float(math.ceil(retail_f * 0.20)) if retail_f > 0 else 0.0
-
-
-def _run_meta_background(artikelnr: str, img_path: Path) -> None:
-    print(f"[BG-KI] Starte Hintergrund-KI für Artikel {artikelnr}")
-    meta, ok, err, runtime_ms = _run_meta_once(artikelnr, img_path)
-
-    mj = _load_meta_json(artikelnr)
-    mj["ki_runtime_ms"] = runtime_ms
-    mj["last_image"] = img_path.name
-    mj["batch_done"] = True
-
-    if ok and meta:
-        _apply_ki_to_meta(mj, meta)
-        mj["ki_source"] = "realtime"
-        mj["ki_last_error"] = ""
-        mj["reviewed"] = False
-        _save_meta_json(artikelnr, mj)
-        _usage_success()
-    else:
-        mj["ki_source"] = "failed"
-        mj["ki_last_error"] = err or "ki_failed"
-        _save_meta_json(artikelnr, mj)
-        _usage_fail(mj["ki_last_error"])
-
-    _rebuild_csv_export()
-    print(f"[BG-KI] Fertig für Artikel {artikelnr} – ki_ok={ok}")
-
-
-# ----------------------------
-# Routes
-# ----------------------------
 @app.get("/")
 def root():
-    return FileResponse(str(BASE_DIR / "index.html"))
+    path = BASE_DIR / "index.html"
+    return FileResponse(str(path))
 
 
 @app.get("/admin")
 def admin_root():
-    return FileResponse(str(BASE_DIR / "admin.html"))
+    path = BASE_DIR / "admin.html"
+    return FileResponse(str(path))
+
+
+@app.get("/api/export.csv")
+def export_csv():
+    # Für Admin-Button: CSV direkt downloaden
+    if not EXPORT_CSV.exists():
+        _rebuild_csv_export()
+    return FileResponse(str(EXPORT_CSV), filename="artikel_export.csv", media_type="text/csv")
 
 
 @app.get("/api/health")
 def health():
     return {"ok": True}
-
-
-@app.get("/api/export.csv")
-def export_csv():
-    if not EXPORT_CSV.exists():
-        _rebuild_csv_export()
-    return FileResponse(str(EXPORT_CSV), filename="artikel_export.csv", media_type="text/csv")
 
 
 @app.get("/api/next_artikelnr")
@@ -343,14 +265,7 @@ def next_artikelnr():
             max_nr = max(max_nr, nr)
         except Exception:
             pass
-    return {"ok": True, "next": max_nr + 1 if max_nr else 1}
-
-
-@app.get("/api/check_artnr")
-def check_artnr(artikelnr: str):
-    artikelnr = str(artikelnr).strip()
-    exists = _meta_path(artikelnr).exists() or any(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
-    return {"ok": True, "exists": bool(exists)}
+    return {"ok": True, "next": max_nr + 1}
 
 
 @app.post("/api/upload")
@@ -359,44 +274,42 @@ async def upload(
     artikelnr: str = Form(...),
     background_tasks: BackgroundTasks = None,
 ):
-    artikelnr = str(artikelnr).strip()
+    artikelnr = artikelnr.strip()
     data = await file.read()
 
+    # Bild öffnen
     try:
         img = Image.open(io.BytesIO(data))
         img = ImageOps.exif_transpose(img)
         img = img.convert("RGB")
-
-        # SPEED: kleiner + schneller für Base64/Upload
-        img.thumbnail((1024, 1024))
+        img.thumbnail((1600, 1600))
     except Exception as e:
         return JSONResponse({"ok": False, "error": f"Ungültiges Bild: {e}"}, status_code=400)
 
+    # Bild speichern
     existing = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
     idx = int(existing[-1].stem.split("_")[-1]) + 1 if existing else 0
-    out = RAW_DIR / f"{artikelnr}_{idx}.jpg"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    img.save(out, "JPEG", quality=78)
 
-    # set pending, damit Polling NICHT bei altem realtime sofort stoppt
+    out = RAW_DIR / f"{artikelnr}_{idx}.jpg"
+    img.save(out, "JPEG", quality=85)
+
+    # Meta minimal
     mj = _load_meta_json(artikelnr)
     mj["last_image"] = out.name
-    mj["ki_source"] = "pending"
-    mj["ki_last_error"] = ""
-    mj["batch_done"] = False
     _save_meta_json(artikelnr, mj)
 
     _rebuild_csv_export()
 
+    # Hintergrund-KI (1 Versuch)
     if background_tasks:
         background_tasks.add_task(_run_meta_background, artikelnr, out)
 
-    return {"ok": True, "filename": out.name}
+    return {"ok": True}
 
 
 @app.get("/api/images")
 def images(artikelnr: str):
-    artikelnr = str(artikelnr).strip()
+    artikelnr = artikelnr.strip()
     files = []
     for f in sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg")):
         rel = f.relative_to(BASE_DIR)
@@ -404,39 +317,9 @@ def images(artikelnr: str):
     return {"ok": True, "files": files}
 
 
-@app.post("/api/delete_image")
-def delete_image(payload: Dict[str, Any]):
-    artikelnr = str(payload.get("artikelnr", "")).strip()
-    filename = str(payload.get("filename", "")).strip()
-
-    if not artikelnr or not filename:
-        return JSONResponse({"ok": False, "error": "artikelnr/filename fehlt"}, status_code=400)
-
-    # Sicherheitscheck: nur Dateien dieses Artikels erlauben
-    if not filename.startswith(f"{artikelnr}_") or not filename.lower().endswith(".jpg"):
-        return JSONResponse({"ok": False, "error": "ungültiger Dateiname"}, status_code=400)
-
-    path = RAW_DIR / filename
-    if not path.exists():
-        return JSONResponse({"ok": False, "error": "Datei nicht gefunden"}, status_code=404)
-
-    try:
-        path.unlink()
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": f"löschen fehlgeschlagen: {e}"}, status_code=500)
-
-    mj = _load_meta_json(artikelnr)
-    pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
-    mj["last_image"] = pics[-1].name if pics else ""
-    _save_meta_json(artikelnr, mj)
-
-    _rebuild_csv_export()
-    return {"ok": True}
-
-
 @app.get("/api/meta")
 def meta(artikelnr: str):
-    artikelnr = str(artikelnr).strip()
+    artikelnr = artikelnr.strip()
     mj = _load_meta_json(artikelnr)
 
     pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
@@ -450,32 +333,31 @@ def meta(artikelnr: str):
         "artikelnr": artikelnr,
         "titel": mj.get("titel", "") or "",
         "beschreibung": mj.get("beschreibung", "") or "",
-        "kategorie": mj.get("kategorie", "") or "",
         "retail_price": mj.get("retail_price", 0.0) or 0.0,
         "rufpreis": mj.get("rufpreis", 0.0) or 0.0,
         "lagerort": mj.get("lagerort", "") or "",
         "einlieferer": mj.get("einlieferer", "") or "",
         "mitarbeiter": mj.get("mitarbeiter", "") or "",
-        "reviewed": bool(mj.get("reviewed", False)),
-        "ki_source": mj.get("ki_source", "") or "",
+        "reviewed": mj.get("reviewed", False) or False,
         "ki_last_error": mj.get("ki_last_error", "") or "",
-        "last_image": mj.get("last_image", "") or "",
+        "ki_source": mj.get("ki_source", "") or "",
         "image": img_url,
     }
 
 
 @app.post("/api/save")
-def save(data: Dict[str, Any]):
+def save(data: dict):
     artikelnr = str(data.get("artikelnr", "")).strip()
     if not artikelnr:
         return JSONResponse({"ok": False, "error": "Artikelnummer fehlt"}, status_code=400)
 
     mj = _load_meta_json(artikelnr)
-    for k in ["titel", "beschreibung", "lagerort", "einlieferer", "mitarbeiter", "kategorie"]:
+
+    for k in ["titel", "beschreibung", "lagerort", "einlieferer", "mitarbeiter"]:
         if k in data and data[k] is not None:
             mj[k] = str(data[k])
-    if "reviewed" in data:
-        mj["reviewed"] = bool(data.get("reviewed", False))
+
+    mj["reviewed"] = bool(data.get("reviewed", False))
 
     _save_meta_json(artikelnr, mj)
     _rebuild_csv_export()
@@ -484,101 +366,75 @@ def save(data: Dict[str, Any]):
 
 @app.get("/api/describe")
 def describe(artikelnr: str):
-    artikelnr = str(artikelnr).strip()
+    """
+    Manuelle KI-Neuberechnung (Button in index.html).
+    GENAU 1 Versuch, kein Fallback, kein Retry.
+    """
+    artikelnr = artikelnr.strip()
     pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
     if not pics:
         return JSONResponse({"ok": False, "error": "Kein Bild für diese Artikelnummer gefunden."}, status_code=400)
 
     img_path = pics[-1]
-
-    # set pending for manual too
-    mj = _load_meta_json(artikelnr)
-    mj["ki_source"] = "pending"
-    mj["ki_last_error"] = ""
-    mj["batch_done"] = False
-    mj["last_image"] = img_path.name
-    _save_meta_json(artikelnr, mj)
-
-    meta, ok, err, runtime_ms = _run_meta_once(artikelnr, img_path)
+    meta, ki_ok, ki_error, runtime_ms = _run_meta_once(artikelnr, img_path)
 
     mj = _load_meta_json(artikelnr)
     mj["ki_runtime_ms"] = runtime_ms
     mj["last_image"] = img_path.name
-    mj["batch_done"] = True
 
-    if ok and meta:
-        _apply_ki_to_meta(mj, meta)
+    if ki_ok:
+        mj["titel"] = (meta.get("title") or "").strip()
+        mj["beschreibung"] = (meta.get("description") or "").strip()
+
+        retail = meta.get("retail_price", 0.0)
+        try:
+            retail_f = float(retail)
+        except (TypeError, ValueError):
+            retail_f = 0.0
+
+        mj["retail_price"] = round(retail_f, 2)
+        mj["rufpreis"] = round(retail_f * 0.20, 2)
+
         mj["ki_source"] = "realtime"
-        mj["ki_last_error"] = ""
+        mj["batch_done"] = True
         mj["reviewed"] = False
+        mj["ki_last_error"] = ""
+
         _save_meta_json(artikelnr, mj)
-        _usage_success()
         _rebuild_csv_export()
+
         return {
             "ok": True,
             "title": mj["titel"],
             "description": mj["beschreibung"],
-            "category": mj.get("kategorie", ""),
             "retail_price": mj["retail_price"],
             "rufpreis": mj["rufpreis"],
             "ki_runtime_ms": runtime_ms,
         }
 
+    # KI fehlgeschlagen: nichts überschreiben, nur Fehler setzen
+    mj["ki_last_error"] = ki_error or "ki_failed"
     mj["ki_source"] = "failed"
-    mj["ki_last_error"] = err or "ki_failed"
+    mj["batch_done"] = True
     _save_meta_json(artikelnr, mj)
-    _usage_fail(mj["ki_last_error"])
     _rebuild_csv_export()
+
     return JSONResponse({"ok": False, "error": mj["ki_last_error"]}, status_code=502)
 
 
-# ----------------------------
-# Admin API (Token geschützt)
-# ----------------------------
-@app.get("/api/admin/budget")
-def admin_budget(request: Request):
-    guard = _admin_guard(request)
-    if guard:
-        return guard
-
-    u = _load_usage()
-    budget = float(u.get("budget_eur", DEFAULT_BUDGET_EUR))
-    spent = float(u.get("spent_est_eur", 0.0))
-    remaining = round(max(budget - spent, 0.0), 4)
-
-    return {
-        "ok": True,
-        "budget_eur": budget,
-        "spent_est_eur": spent,
-        "remaining_est_eur": remaining,
-        "success_calls": int(u.get("success_calls", 0)),
-        "failed_calls": int(u.get("failed_calls", 0)),
-        "cost_per_success_call_eur": float(u.get("cost_per_success_call_eur", COST_PER_SUCCESS_CALL_EUR)),
-        "last_success_at": int(u.get("last_success_at", 0)),
-        "last_error": u.get("last_error", "") or "",
-    }
-
+# ---- Admin API ----
 
 @app.get("/api/admin/articles")
-def admin_articles(request: Request, category: str = "", only_failed: int = 0):
-    guard = _admin_guard(request)
-    if guard:
-        return guard
-
+def admin_articles():
     items = []
+
     for p in RAW_DIR.glob("*.json"):
         try:
             mj = json.loads(p.read_text("utf-8"))
         except Exception:
             continue
 
-        nr = str(mj.get("artikelnr", p.stem))
-        cat = (mj.get("kategorie", "") or "").strip()
-
-        if category and cat.lower() != category.strip().lower():
-            continue
-        if only_failed and (mj.get("ki_source") != "failed"):
-            continue
+        nr = mj.get("artikelnr", p.stem)
 
         pics = sorted(RAW_DIR.glob(f"{nr}_*.jpg"))
         img_url = ""
@@ -590,21 +446,36 @@ def admin_articles(request: Request, category: str = "", only_failed: int = 0):
             "artikelnr": nr,
             "titel": mj.get("titel", "") or "",
             "beschreibung": mj.get("beschreibung", "") or "",
-            "kategorie": cat,
             "retail_price": mj.get("retail_price", 0.0) or 0.0,
             "rufpreis": mj.get("rufpreis", 0.0) or 0.0,
             "reviewed": bool(mj.get("reviewed", False)),
             "ki_source": mj.get("ki_source", "") or "",
-            "ki_last_error": mj.get("ki_last_error", "") or "",
-            "last_image": mj.get("last_image", "") or "",
-            "image": img_url,
+            "image": img_url
         })
 
-    def _sort_key(x):
-        try:
-            return int(x["artikelnr"])
-        except Exception:
-            return x["artikelnr"]
+    try:
+        items.sort(key=lambda x: int(x["artikelnr"]))
+    except Exception:
+        items.sort(key=lambda x: str(x["artikelnr"]))
 
-    items.sort(key=_sort_key)
     return {"ok": True, "items": items}
+
+
+@app.post("/api/admin/articles/update")
+def admin_update(data: dict):
+    artikelnr = str(data.get("artikelnr", "")).strip()
+    if not artikelnr:
+        return JSONResponse({"ok": False, "error": "Artikelnummer fehlt"}, status_code=400)
+
+    mj = _load_meta_json(artikelnr)
+
+    if "titel" in data and data["titel"] is not None:
+        mj["titel"] = str(data["titel"])
+    if "beschreibung" in data and data["beschreibung"] is not None:
+        mj["beschreibung"] = str(data["beschreibung"])
+    if "reviewed" in data:
+        mj["reviewed"] = bool(data["reviewed"])
+
+    _save_meta_json(artikelnr, mj)
+    _rebuild_csv_export()
+    return {"ok": True}
