@@ -9,7 +9,7 @@
 
 <body class="min-h-screen bg-slate-900 text-white">
 
-<div class="max-w-5xl mx-auto px-4 py-6">
+<div class="max-w-6xl mx-auto px-4 py-6">
 
   <header class="flex items-center justify-between mb-6">
     <div class="text-xl font-bold">MyAuktion · Admin</div>
@@ -17,7 +17,7 @@
   </header>
 
   <!-- LOGIN -->
-  <section id="login-box" class="bg-slate-800 rounded-xl p-5 max-w-md mx-auto">
+  <section id="login" class="bg-slate-800 rounded-xl p-5 max-w-md mx-auto">
     <h2 class="font-semibold mb-3">Admin Zugriff</h2>
     <input id="token" type="password" placeholder="Admin Token"
            class="w-full p-2 rounded text-black mb-3">
@@ -25,37 +25,53 @@
             class="bg-white text-slate-900 font-semibold px-4 py-2 rounded w-full">
       Anmelden
     </button>
-    <div id="login-error" class="text-red-400 text-sm mt-2 hidden">
+    <div id="err" class="text-red-400 text-sm mt-2 hidden">
       Ungültiger Token
     </div>
   </section>
 
   <!-- DASHBOARD -->
-  <section id="dashboard" class="hidden">
+  <section id="dash" class="hidden">
 
+    <!-- BUDGET -->
     <div class="grid md:grid-cols-3 gap-4 mb-6">
       <div class="bg-slate-800 rounded-xl p-4">
-        <div class="text-sm opacity-70">Artikel gesamt</div>
-        <div id="stat-articles" class="text-2xl font-bold">–</div>
+        <div class="text-sm opacity-70">Budget</div>
+        <div id="b-budget" class="text-2xl font-bold">–</div>
       </div>
-
       <div class="bg-slate-800 rounded-xl p-4">
-        <div class="text-sm opacity-70">KI erfolgreich</div>
-        <div id="stat-ok" class="text-2xl font-bold text-green-400">–</div>
+        <div class="text-sm opacity-70">Verbraucht (Schätzung)</div>
+        <div id="b-spent" class="text-2xl font-bold text-yellow-400">–</div>
       </div>
-
       <div class="bg-slate-800 rounded-xl p-4">
-        <div class="text-sm opacity-70">KI fehlgeschlagen</div>
-        <div id="stat-fail" class="text-2xl font-bold text-red-400">–</div>
+        <div class="text-sm opacity-70">Restbudget</div>
+        <div id="b-rest" class="text-2xl font-bold text-green-400">–</div>
       </div>
     </div>
 
-    <div class="bg-slate-800 rounded-xl p-5">
-      <h3 class="font-semibold mb-2">KI Budget / Nutzung</h3>
-      <div class="text-sm opacity-80 mb-1">
-        (Schätzung basierend auf API-Aufrufen)
+    <!-- KI STATUS -->
+    <div class="bg-slate-800 rounded-xl p-5 mb-6">
+      <h3 class="font-semibold mb-3">KI Status</h3>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div>
+          <div class="text-xs opacity-70">Erfolgreich</div>
+          <div id="b-ok" class="text-xl font-bold text-green-400">–</div>
+        </div>
+        <div>
+          <div class="text-xs opacity-70">Fehlgeschlagen</div>
+          <div id="b-fail" class="text-xl font-bold text-red-400">–</div>
+        </div>
+        <div>
+          <div class="text-xs opacity-70">Kosten / Call</div>
+          <div id="b-cost" class="text-xl font-bold">–</div>
+        </div>
       </div>
-      <div id="budget" class="text-2xl font-bold">–</div>
+    </div>
+
+    <!-- ARTIKEL -->
+    <div class="bg-slate-800 rounded-xl p-5">
+      <h3 class="font-semibold mb-3">Artikelübersicht</h3>
+      <div id="list" class="text-sm space-y-2"></div>
     </div>
 
   </section>
@@ -63,32 +79,48 @@
 </div>
 
 <script>
-const loginBox = document.getElementById("login-box");
-const dash = document.getElementById("dashboard");
-const err = document.getElementById("login-error");
+const login = document.getElementById("login");
+const dash  = document.getElementById("dash");
+const err   = document.getElementById("err");
+let TOKEN = "";
 
 document.getElementById("btn-login").onclick = async () => {
-  const token = document.getElementById("token").value.trim();
-  if (!token) return;
+  TOKEN = document.getElementById("token").value.trim();
+  if (!TOKEN) return;
 
-  const res = await fetch("/api/admin/stats", {
-    headers: { "X-ADMIN-TOKEN": token }
-  });
+  const h = { "X-Admin-Token": TOKEN };
 
-  if (!res.ok) {
-    err.classList.remove("hidden");
-    return;
-  }
+  // Budget
+  const b = await fetch("/api/admin/budget", { headers: h });
+  if (!b.ok) { err.classList.remove("hidden"); return; }
+  const bj = await b.json();
 
-  const j = await res.json();
-  loginBox.classList.add("hidden");
+  // Artikel
+  const a = await fetch("/api/admin/articles", { headers: h });
+  const aj = await a.json();
+
+  login.classList.add("hidden");
   dash.classList.remove("hidden");
 
-  document.getElementById("stat-articles").textContent = j.articles;
-  document.getElementById("stat-ok").textContent = j.ki_ok;
-  document.getElementById("stat-fail").textContent = j.ki_fail;
-  document.getElementById("budget").textContent =
-    j.estimated_cost.toFixed(2) + " €";
+  document.getElementById("b-budget").textContent = bj.budget_eur.toFixed(2) + " €";
+  document.getElementById("b-spent").textContent  = bj.spent_est_eur.toFixed(2) + " €";
+  document.getElementById("b-rest").textContent   = bj.remaining_est_eur.toFixed(2) + " €";
+  document.getElementById("b-ok").textContent     = bj.success_calls;
+  document.getElementById("b-fail").textContent   = bj.failed_calls;
+  document.getElementById("b-cost").textContent   = bj.cost_per_success_call_eur + " €";
+
+  const list = document.getElementById("list");
+  list.innerHTML = "";
+  aj.items.forEach(it => {
+    const div = document.createElement("div");
+    div.className = "border-b border-white/10 pb-1";
+    div.innerHTML =
+      `<b>${it.artikelnr}</b> · ${it.titel || "(kein Titel)"}<br>
+       <span class="opacity-70">
+         KI: ${it.ki_source} · Preis: ${it.retail_price} € → ${it.rufpreis} €
+       </span>`;
+    list.appendChild(div);
+  });
 };
 </script>
 
