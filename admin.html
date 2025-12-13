@@ -2,440 +2,251 @@
 <html lang="de">
 <head>
   <meta charset="utf-8">
-  <title>MyAuktion · Admin</title>
   <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>MyAuktion · Admin</title>
   <link rel="icon" type="image/x-icon" href="/static/my_icon.ico">
-  <script defer src="https://unpkg.com/lucide@latest"></script>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
-    body {
-      min-height: 100vh;
-      background:
-        radial-gradient(900px 500px at 80% -10%, #e7f1ff 0%, transparent 60%),
-        linear-gradient(135deg,#0ea5e9,#1d4ed8 60%,#020617);
-      color:#f9fafb;
-    }
-    .glass {
-      background: rgba(15,23,42,.85);
-      border-radius:1.5rem;
-      border:1px solid rgba(148,163,184,.5);
-      box-shadow:0 20px 60px rgba(15,23,42,.7);
-      backdrop-filter:blur(14px);
-    }
-    .input {
-      width:100%;
-      padding:.5rem .7rem;
-      border-radius:.6rem;
-      border:1px solid rgba(148,163,184,.7);
-      background:rgba(15,23,42,.9);
-      color:#e5e7eb;
-      font-size:.85rem;
-      outline:none;
-    }
-    .input:focus {
-      border-color:#60a5fa;
-      box-shadow:0 0 0 1px rgba(96,165,250,.6);
-    }
-    textarea {
-      width:100%;
-      padding:.5rem .7rem;
-      border-radius:.6rem;
-      border:1px solid rgba(148,163,184,.7);
-      background:rgba(15,23,42,.9);
-      color:#e5e7eb;
-      font-size:.85rem;
-      min-height:90px;
-      resize:vertical;
-      outline:none;
-    }
-    textarea:focus {
-      border-color:#60a5fa;
-      box-shadow:0 0 0 1px rgba(96,165,250,.6);
-    }
-    .btn {
-      display:inline-flex;
-      align-items:center;
-      gap:.3rem;
-      padding:.4rem .8rem;
-      border-radius:999px;
-      font-size:.82rem;
-      font-weight:600;
-      border:1px solid transparent;
-      cursor:pointer;
-      transition:.15s;
-      white-space:nowrap;
-    }
-    .btn-primary {
-      background:#f8fafc;
-      color:#020617;
-      border-color:#e2e8f0;
-    }
-    .btn-primary:hover { background:#e5e7eb; }
-    .btn-ghost {
-      background:transparent;
-      color:#e5e7eb;
-      border-color:rgba(148,163,184,.7);
-    }
-    .btn-ghost:hover { background:rgba(15,23,42,.9); }
-
-    .badge {
-      display:inline-flex;
-      align-items:center;
-      gap:.25rem;
-      padding:.15rem .45rem;
-      border-radius:999px;
-      font-size:.68rem;
-      border:1px solid rgba(148,163,184,.7);
-      background:rgba(15,23,42,.9);
-    }
-    .badge-dot {
-      width:7px;height:7px;border-radius:999px;
-    }
-    #toast-wrap{
-      position:fixed;top:10px;right:10px;z-index:50;
-      display:flex;flex-direction:column;gap:5px;
-    }
-    .toast{
-      background:#e5f3ff;
-      color:#0f172a;
-      padding:6px 11px;
-      border-radius:999px;
-      font-size:.8rem;
-      font-weight:600;
-      box-shadow:0 10px 30px rgba(15,23,42,.6);
-      opacity:0;
-      transform:translateY(-4px) scale(.96);
-      transition:.18s;
-    }
-    .toast.show {
-      opacity:1;
-      transform:translateY(0) scale(1);
-    }
+    body{min-height:100vh;background:linear-gradient(135deg,#0ea5e9,#1d4ed8 60%,#1e293b);color:#fff}
+    .glass{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.16);backdrop-filter:blur(12px)}
+    .input{width:100%;padding:.55rem .8rem;border-radius:.8rem;border:1px solid rgba(255,255,255,.35);background:#fff;color:#000}
+    .btn{padding:.55rem 1rem;border-radius:999px;font-weight:700}
+    .btn-primary{background:#fff;color:#0f172a;box-shadow:0 8px 18px rgba(0,0,0,.2)}
+    .badge{font-size:.72rem;padding:.2rem .55rem;border-radius:999px}
+    .bad-red{background:rgba(239,68,68,.18);border:1px solid rgba(239,68,68,.5);color:#fecaca}
+    .bad-green{background:rgba(34,197,94,.18);border:1px solid rgba(34,197,94,.5);color:#bbf7d0}
+    .bad-yellow{background:rgba(250,204,21,.18);border:1px solid rgba(250,204,21,.55);color:#fde68a}
   </style>
 </head>
-<body class="pb-10">
-
-<div id="toast-wrap"></div>
-
+<body>
 <div class="max-w-6xl mx-auto px-4 py-6">
-
-  <!-- HEADER -->
-  <header class="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-6">
-    <div class="flex items-center gap-3">
-      <div class="w-11 h-11 rounded-full bg-white flex items-center justify-center shadow-lg overflow-hidden">
-        <img src="/static/myauktion_logo.png" class="max-w-[34px] max-h-[34px]">
-      </div>
-      <div>
-        <div class="text-xl font-bold tracking-tight flex items-center gap-1">
-          MyAuktion
-          <span class="text-sm font-semibold text-sky-100/90">· Admin</span>
-        </div>
-        <div class="text-xs text-sky-100/80">
-          Übersicht & Feinschliff aller Artikeltexte und KI-Preise.
-        </div>
-      </div>
+  <header class="flex items-center justify-between mb-6">
+    <div>
+      <div class="text-2xl font-extrabold">MyAuktion · Admin</div>
+      <div class="text-xs opacity-80">Budget, Flags, Überblick & CSV</div>
     </div>
-    <div class="flex items-center gap-2">
-      <a href="/" class="btn btn-ghost">
-        <i data-lucide="camera" class="w-4 h-4"></i>
-        Zur Artikelaufnahme
-      </a>
-      <a href="/api/export.csv" class="btn btn-primary">
-        <i data-lucide="download" class="w-4 h-4"></i>
-        CSV Export
-      </a>
+    <div class="flex gap-2">
+      <a href="/" class="underline text-sm opacity-90">Zur Artikelaufnahme</a>
     </div>
   </header>
 
-  <!-- FILTER / STATUS -->
-  <section class="glass px-4 py-3 mb-5 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-    <div>
-      <div class="text-sm font-semibold">Filter</div>
-      <div class="text-xs text-slate-300/90">
-        Wähle, ob nur ungeprüfte Artikel oder alle angezeigt werden sollen.
+  <div id="locked" class="glass rounded-3xl p-6 shadow-xl hidden">
+    <div class="text-lg font-bold mb-2">Admin geschützt</div>
+    <p class="text-sm opacity-90 mb-4">Bitte Admin-Token eingeben, damit Budget & Admin-Flags sichtbar sind.</p>
+    <div class="grid md:grid-cols-3 gap-3 items-end">
+      <div class="md:col-span-2">
+        <label class="text-xs opacity-80">Admin-Token</label>
+        <input id="token" class="input" placeholder="Token eingeben…">
       </div>
+      <button id="btn-unlock" class="btn btn-primary w-full">Freischalten</button>
     </div>
-    <div class="flex items-center gap-3">
-      <select id="filter-status" class="input max-w-[180px]">
-        <option value="unreviewed">Nur ungeprüfte</option>
-        <option value="all">Alle Artikel</option>
-      </select>
-      <button id="btn-refresh" class="btn btn-ghost">
-        <i data-lucide="refresh-ccw" class="w-4 h-4"></i>
-        Neu laden
-      </button>
-    </div>
-  </section>
+    <p class="text-xs opacity-70 mt-3">Token wird lokal im Browser gespeichert (localStorage).</p>
+  </div>
 
-  <!-- ARTIKELLISTE -->
-  <section class="glass p-4">
-    <div class="flex items-center justify-between mb-3">
-      <h2 class="text-sm font-semibold text-slate-100 uppercase tracking-wide">Artikel</h2>
-      <span id="count-label" class="text-xs text-slate-300/90"></span>
-    </div>
+  <div id="content" class="hidden">
+    <section class="glass rounded-3xl p-5 shadow-xl mb-5">
+      <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+        <div>
+          <div class="text-lg font-bold">KI Budget (geschätzt)</div>
+          <div class="text-xs opacity-80">Schätzung basiert auf erfolgreichen KI-Aufrufen (fixer €/Call). OpenAI-Hardlimit steuerst du im Dashboard.</div>
+        </div>
+        <div class="flex gap-2">
+          <a href="/api/export.csv" class="btn btn-primary">CSV downloaden</a>
+          <button id="btn-refresh" class="btn btn-primary">Refresh</button>
+        </div>
+      </div>
 
-    <div id="list" class="space-y-3 max-h-[70vh] overflow-y-auto pr-1"></div>
-  </section>
+      <div class="grid md:grid-cols-5 gap-3 mt-4">
+        <div class="glass rounded-2xl p-3">
+          <div class="text-xs opacity-80">Budget</div>
+          <div id="b-budget" class="text-xl font-extrabold">–</div>
+        </div>
+        <div class="glass rounded-2xl p-3">
+          <div class="text-xs opacity-80">Verbraucht</div>
+          <div id="b-spent" class="text-xl font-extrabold">–</div>
+        </div>
+        <div class="glass rounded-2xl p-3">
+          <div class="text-xs opacity-80">Rest</div>
+          <div id="b-remaining" class="text-xl font-extrabold">–</div>
+        </div>
+        <div class="glass rounded-2xl p-3">
+          <div class="text-xs opacity-80">KI Success</div>
+          <div id="b-success" class="text-xl font-extrabold">–</div>
+        </div>
+        <div class="glass rounded-2xl p-3">
+          <div class="text-xs opacity-80">KI Fail</div>
+          <div id="b-fail" class="text-xl font-extrabold">–</div>
+        </div>
+      </div>
+
+      <div class="text-xs opacity-80 mt-3">
+        Letzter Fehler: <span id="b-lasterr" class="opacity-95">–</span>
+      </div>
+    </section>
+
+    <section class="glass rounded-3xl p-5 shadow-xl">
+      <div class="flex flex-col md:flex-row md:items-end md:justify-between gap-3">
+        <div>
+          <div class="text-lg font-bold">Artikel</div>
+          <div class="text-xs opacity-80">KI failed (rot), reviewed (grün), manuell (gelb)</div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-2 w-full md:w-auto">
+          <div>
+            <label class="text-xs opacity-80">Kategorie</label>
+            <select id="f-cat" class="input">
+              <option value="">Alle</option>
+              <option>Parfum</option><option>Kosmetik</option><option>Werkzeug</option><option>Elektronik</option>
+              <option>Haushalt</option><option>Kleidung</option><option>Schmuck/Uhren</option><option>Spielzeug</option>
+              <option>Bücher/Medien</option><option>Sonstiges</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-xs opacity-80">Nur KI-Fehler</label>
+            <select id="f-failed" class="input">
+              <option value="0" selected>Nein</option>
+              <option value="1">Ja</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-xs opacity-80">Suche</label>
+            <input id="f-q" class="input" placeholder="ArtikelNr / Titel…">
+          </div>
+        </div>
+      </div>
+
+      <div class="overflow-x-auto mt-4">
+        <table class="w-full text-sm">
+          <thead class="text-left opacity-90">
+            <tr>
+              <th class="py-2 pr-3">Bild</th>
+              <th class="py-2 pr-3">ArtikelNr</th>
+              <th class="py-2 pr-3">Kategorie</th>
+              <th class="py-2 pr-3">Bezeichnung</th>
+              <th class="py-2 pr-3">Listenpreis</th>
+              <th class="py-2 pr-3">Rufpreis</th>
+              <th class="py-2 pr-3">Status</th>
+              <th class="py-2 pr-3">Fehler</th>
+            </tr>
+          </thead>
+          <tbody id="rows" class="align-top"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
 </div>
 
 <script>
-  const listEl = document.getElementById('list');
-  const filterStatusEl = document.getElementById('filter-status');
+  const locked = document.getElementById('locked');
+  const content = document.getElementById('content');
+  const tokenInp = document.getElementById('token');
+  const btnUnlock = document.getElementById('btn-unlock');
+
+  const bBudget = document.getElementById('b-budget');
+  const bSpent = document.getElementById('b-spent');
+  const bRemaining = document.getElementById('b-remaining');
+  const bSuccess = document.getElementById('b-success');
+  const bFail = document.getElementById('b-fail');
+  const bLastErr = document.getElementById('b-lasterr');
+
+  const rowsEl = document.getElementById('rows');
+  const fCat = document.getElementById('f-cat');
+  const fFailed = document.getElementById('f-failed');
+  const fQ = document.getElementById('f-q');
   const btnRefresh = document.getElementById('btn-refresh');
-  const countLabel = document.getElementById('count-label');
-  const toastWrap = document.getElementById('toast-wrap');
 
-  let allArticles = [];
+  function getToken(){ return localStorage.getItem("MYAUKTION_ADMIN_TOKEN") || ""; }
+  function setToken(t){ localStorage.setItem("MYAUKTION_ADMIN_TOKEN", t); }
 
-  function toast(msg){
-    const el = document.createElement('div');
-    el.className = 'toast';
-    el.textContent = msg;
-    toastWrap.appendChild(el);
-    requestAnimationFrame(()=> el.classList.add('show'));
-    setTimeout(()=>{
-      el.classList.remove('show');
-      setTimeout(()=> el.remove(), 200);
-    }, 1800);
+  async function api(path){
+    const t = getToken();
+    const res = await fetch(path, { headers: t ? {"X-Admin-Token": t} : {} });
+    if(res.status === 401) throw new Error("unauthorized");
+    return res.json();
   }
 
-  function euro(value){
-    const v = Number(value || 0);
-    if (!isFinite(v)) return '0,00 €';
-    return v.toLocaleString('de-AT', {minimumFractionDigits:2, maximumFractionDigits:2}) + ' €';
+  function money(v){ return (Math.round(v*100)/100).toFixed(2).replace(".", ",") + " €"; }
+  function badge(text, cls){ return `<span class="badge ${cls}">${text}</span>`; }
+
+  function renderRows(items){
+    const q = (fQ.value || "").trim().toLowerCase();
+    const filtered = items.filter(it=>{
+      if(!q) return true;
+      return (String(it.artikelnr).toLowerCase().includes(q) || String(it.titel).toLowerCase().includes(q));
+    });
+
+    rowsEl.innerHTML = filtered.map(it=>{
+      const img = it.image ? `<img src="${it.image}" style="height:54px;border-radius:12px;border:1px solid rgba(255,255,255,.25)">` : '';
+      const st = [];
+      if(it.reviewed) st.push(badge("reviewed","bad-green"));
+      if(it.ki_source === "failed") st.push(badge("KI failed","bad-red"));
+      if(it.ki_source === "realtime") st.push(badge("KI ok","bad-green"));
+      if(!it.ki_source || it.ki_source === "pending") st.push(badge(it.ki_source === "pending" ? "pending" : "manuell","bad-yellow"));
+
+      return `
+        <tr class="border-t border-white/15">
+          <td class="py-2 pr-3">${img}</td>
+          <td class="py-2 pr-3 font-bold">${it.artikelnr}</td>
+          <td class="py-2 pr-3">${it.kategorie || ""}</td>
+          <td class="py-2 pr-3">${(it.titel||"").replaceAll("<","&lt;")}</td>
+          <td class="py-2 pr-3">${money(Number(it.retail_price||0))}</td>
+          <td class="py-2 pr-3">${money(Number(it.rufpreis||0))}</td>
+          <td class="py-2 pr-3">${st.join(" ")}</td>
+          <td class="py-2 pr-3 text-xs opacity-90">${(it.ki_last_error||"")}</td>
+        </tr>
+      `;
+    }).join("");
   }
 
-  function renderList(){
-    const mode = filterStatusEl.value;
-    let items = allArticles.slice();
+  async function refresh(){
+    const cat = (fCat.value || "").trim();
+    const only_failed = fFailed.value || "0";
+    const qs = new URLSearchParams();
+    if(cat) qs.set("category", cat);
+    if(only_failed === "1") qs.set("only_failed", "1");
 
-    if (mode === 'unreviewed') {
-      items = items.filter(a => !a.reviewed);
-    }
+    const budget = await api("/api/admin/budget");
+    bBudget.textContent = money(budget.budget_eur);
+    bSpent.textContent = money(budget.spent_est_eur);
+    bRemaining.textContent = money(budget.remaining_est_eur);
+    bSuccess.textContent = String(budget.success_calls);
+    bFail.textContent = String(budget.failed_calls);
+    bLastErr.textContent = budget.last_error || "—";
 
-    countLabel.textContent = items.length + ' Artikel angezeigt';
+    const arts = await api("/api/admin/articles?" + qs.toString());
+    renderRows(arts.items || []);
+  }
 
-    listEl.innerHTML = '';
-    if (!items.length) {
-      listEl.innerHTML = '<div class="text-xs text-slate-300 py-4 text-center">Keine Artikel gefunden.</div>';
+  async function init(){
+    const t = getToken();
+    if(!t){
+      locked.classList.remove("hidden");
+      content.classList.add("hidden");
       return;
     }
-
-    for (const a of items) {
-      const card = document.createElement('div');
-      card.className = 'flex gap-3 border border-slate-700/80 rounded-xl p-3 bg-slate-900/60';
-
-      const imgCol = document.createElement('div');
-      imgCol.className = 'w-24 flex-shrink-0 flex flex-col items-center gap-2';
-
-      const thumb = document.createElement('div');
-      thumb.className = 'w-20 h-20 rounded-lg bg-slate-800/80 flex items-center justify-center overflow-hidden border border-slate-700/80';
-      if (a.image) {
-        const im = document.createElement('img');
-        im.src = a.image;
-        im.className = 'w-full h-full object-cover';
-        thumb.appendChild(im);
-      } else {
-        thumb.innerHTML = '<span class="text-[11px] text-slate-400 text-center px-1">Kein Bild</span>';
-      }
-      imgCol.appendChild(thumb);
-
-      const metaLine = document.createElement('div');
-      metaLine.className = 'text-[11px] text-slate-300 flex flex-col items-center';
-
-      const nrSpan = document.createElement('div');
-      nrSpan.textContent = 'Art.-Nr. ' + a.artikelnr;
-      metaLine.appendChild(nrSpan);
-
-      if (a.ki_source) {
-        const badge = document.createElement('div');
-        badge.className = 'badge mt-1';
-        const dot = document.createElement('span');
-        dot.className = 'badge-dot';
-        dot.style.background = a.ki_source === 'realtime' ? '#22c55e' : '#facc15';
-        badge.appendChild(dot);
-        const t = document.createElement('span');
-        t.textContent = a.ki_source === 'realtime' ? 'Echtzeit-KI' : a.ki_source;
-        badge.appendChild(t);
-        metaLine.appendChild(badge);
-      }
-
-      if (a.reviewed) {
-        const badge = document.createElement('div');
-        badge.className = 'badge mt-1';
-        const dot = document.createElement('span');
-        dot.className = 'badge-dot';
-        dot.style.background = '#22c55e';
-        badge.appendChild(dot);
-        const t = document.createElement('span');
-        t.textContent = 'Geprüft';
-        badge.appendChild(t);
-        metaLine.appendChild(badge);
-      }
-
-      imgCol.appendChild(metaLine);
-
-      const body = document.createElement('div');
-      body.className = 'flex-1 flex flex-col gap-2';
-
-      const titleRow = document.createElement('div');
-      titleRow.className = 'flex items-center justify-between gap-2';
-      const titleLabel = document.createElement('div');
-      titleLabel.className = 'text-[11px] uppercase text-slate-300 tracking-wide';
-      titleLabel.textContent = 'Bezeichnung';
-      titleRow.appendChild(titleLabel);
-
-      const priceDisplay = document.createElement('div');
-      priceDisplay.className = 'text-[11px] text-slate-200 text-right';
-      priceDisplay.innerHTML = `
-        <div>KI-Listenpreis: <span class="font-semibold">${euro(a.retail_price)}</span></div>
-        <div class="text-slate-300/90">Rufpreis (20%): <span class="font-semibold">${euro(a.rufpreis)}</span></div>
-      `;
-      titleRow.appendChild(priceDisplay);
-
-      const titleInput = document.createElement('input');
-      titleInput.className = 'input mt-1';
-      titleInput.value = a.titel || '';
-      titleInput.autocomplete = 'off';
-
-      const descLabel = document.createElement('div');
-      descLabel.className = 'text-[11px] uppercase text-slate-300 tracking-wide mt-2';
-      descLabel.textContent = 'Beschreibung';
-
-      const descArea = document.createElement('textarea');
-      descArea.value = a.beschreibung || '';
-
-      const btnRow = document.createElement('div');
-      btnRow.className = 'flex flex-wrap items-center justify-between gap-2 mt-2';
-
-      const leftBtns = document.createElement('div');
-      leftBtns.className = 'flex items-center gap-2';
-
-      const saveBtn = document.createElement('button');
-      saveBtn.className = 'btn btn-primary';
-      saveBtn.innerHTML = '<i data-lucide="save" class="w-4 h-4"></i><span>Speichern</span>';
-
-      const markBtn = document.createElement('button');
-      markBtn.className = 'btn btn-ghost';
-      markBtn.innerHTML = '<i data-lucide="check-circle2" class="w-4 h-4"></i><span>Als geprüft markieren</span>';
-
-      leftBtns.appendChild(saveBtn);
-      leftBtns.appendChild(markBtn);
-
-      const infoText = document.createElement('div');
-      infoText.className = 'text-[11px] text-slate-400';
-      infoText.textContent = 'Änderungen werden in der Export-CSV übernommen.';
-
-      btnRow.appendChild(leftBtns);
-      btnRow.appendChild(infoText);
-
-      body.appendChild(titleRow);
-      body.appendChild(titleInput);
-      body.appendChild(descLabel);
-      body.appendChild(descArea);
-      body.appendChild(btnRow);
-
-      card.appendChild(imgCol);
-      card.appendChild(body);
-
-      // Events: speichern / markieren
-      saveBtn.addEventListener('click', async ()=>{
-        saveBtn.disabled = true;
-        markBtn.disabled = true;
-        try {
-          const payload = {
-            artikelnr: a.artikelnr,
-            titel: titleInput.value,
-            beschreibung: descArea.value,
-            reviewed: a.reviewed, // nur Text ändern
-          };
-          const res = await fetch('/api/admin/articles/update', {
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
-            body:JSON.stringify(payload)
-          });
-          const j = await res.json();
-          if (!res.ok || !j.ok) {
-            alert('Fehler beim Speichern: ' + (j.error || res.status));
-          } else {
-            a.titel = titleInput.value;
-            a.beschreibung = descArea.value;
-            toast('Artikel ' + a.artikelnr + ' gespeichert');
-          }
-        } catch(e){
-          console.error(e);
-          alert('Serverfehler beim Speichern.');
-        } finally {
-          saveBtn.disabled = false;
-          markBtn.disabled = false;
-        }
-      });
-
-      markBtn.addEventListener('click', async ()=>{
-        saveBtn.disabled = true;
-        markBtn.disabled = true;
-        try {
-          const payload = {
-            artikelnr: a.artikelnr,
-            titel: titleInput.value,
-            beschreibung: descArea.value,
-            reviewed: true,
-          };
-          const res = await fetch('/api/admin/articles/update', {
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
-            body:JSON.stringify(payload)
-          });
-          const j = await res.json();
-          if (!res.ok || !j.ok) {
-            alert('Fehler beim Speichern: ' + (j.error || res.status));
-          } else {
-            a.titel = titleInput.value;
-            a.beschreibung = descArea.value;
-            a.reviewed = true;
-            toast('Artikel ' + a.artikelnr + ' als geprüft markiert');
-            renderList(); // neu zeichnen wegen Filter
-          }
-        } catch(e){
-          console.error(e);
-          alert('Serverfehler beim Speichern.');
-        } finally {
-          saveBtn.disabled = false;
-          markBtn.disabled = false;
-        }
-      });
-
-      listEl.appendChild(card);
-    }
-
-    if (window.lucide) lucide.createIcons();
-  }
-
-  async function loadArticles(){
-    listEl.innerHTML = '<div class="text-xs text-slate-300 py-4 text-center">Lade Artikel…</div>';
     try{
-      const res = await fetch('/api/admin/articles');
-      const j = await res.json();
-      if (!res.ok || !j.ok) {
-        listEl.innerHTML = '<div class="text-xs text-red-300 py-4 text-center">Fehler beim Laden.</div>';
-        return;
-      }
-      allArticles = j.items || [];
-      renderList();
+      locked.classList.add("hidden");
+      content.classList.remove("hidden");
+      await refresh();
     }catch(e){
-      console.error(e);
-      listEl.innerHTML = '<div class="text-xs text-red-300 py-4 text-center">Serverfehler.</div>';
+      locked.classList.remove("hidden");
+      content.classList.add("hidden");
     }
   }
 
-  filterStatusEl.addEventListener('change', renderList);
-  btnRefresh.addEventListener('click', ()=>{ loadArticles(); toast('Daten aktualisiert'); });
+  btnUnlock.onclick = async ()=>{
+    const t = (tokenInp.value || "").trim();
+    if(!t) return;
+    setToken(t);
+    await init();
+  };
 
-  window.addEventListener('DOMContentLoaded', ()=>{
-    if (window.lucide) lucide.createIcons();
-    loadArticles();
-  });
+  btnRefresh.onclick = refresh;
+  fCat.onchange = refresh;
+  fFailed.onchange = refresh;
+  fQ.oninput = ()=> init();
+
+  init();
 </script>
-
 </body>
 </html>

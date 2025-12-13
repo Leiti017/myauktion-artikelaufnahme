@@ -1,90 +1,171 @@
-# [DATEI: ki_engine_openai.py]
-# MyAuktion – Vision-KI via OpenAI (Titel, Beschreibung & Preis)
+# ki_engine_openai.py – OpenAI Vision Engine (FINAL, schnell + Kontext fürs 2. Foto)
+# - KEIN Fallback: bei Fehler -> None
+# - NAME: "Marke Produktbezeichnung Typenbezeichnung"
+# - TEXT: alle Details (Menge/ml/g/Stück, Maße z.B. 23 cm, MHD wenn sichtbar, Set, Verpackung, etc.)
+# - Kontext (Alt-Daten) wird genutzt, um beim 2. Foto fehlende Details zu ergänzen
+# - Speed: detail="low", kleinere Bilder, weniger max_tokens
+
+from __future__ import annotations
 
 import base64
-import time
-import requests
-from pathlib import Path
-import re
 import os
+import re
+import time
+from typing import Any, Dict, Optional
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+import requests
+
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
-MODEL = "gpt-4o-mini"   # schnell + günstig + Vision perfekt geeignet
+MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+
+# Debug (nur Länge / vorhanden)
+print("[KI-DEBUG] OPENAI_API_KEY vorhanden:", bool(OPENAI_API_KEY))
+print("[KI-DEBUG] OPENAI_API_KEY Länge:", len(OPENAI_API_KEY) if OPENAI_API_KEY else 0)
+
+CATEGORIES = [
+    "Parfum",
+    "Kosmetik",
+    "Werkzeug",
+    "Elektronik",
+    "Haushalt",
+    "Kleidung",
+    "Schmuck/Uhren",
+    "Spielzeug",
+    "Bücher/Medien",
+    "Sonstiges",
+]
+
+SYSTEM_PROMPT = f"""
+Du bist ein extrem präziser Produkt-Assistent für ein Auktionssystem.
+Du analysierst Produktfotos. Es kann mehrere Fotos desselben Artikels geben.
+
+========================
+BEZEICHNUNG (NAME)
+========================
+Die Bezeichnung MUSS IMMER genau so aufgebaut sein:
+
+Marke Produktbezeichnung Typenbezeichnung
+
+Regeln für NAME:
+- Kurz und sachlich
+- KEINE Mengenangaben (kein ml, g, Stück)
+- KEINE Set-Hinweise
+- KEIN MHD
+- KEINE Zustandsangaben
+- KEINE Verpackungshinweise
+- Wenn eine Komponente nicht erkennbar ist, lasse sie weg.
+- Reihenfolge IMMER einhalten.
+
+========================
+BESCHREIBUNG (TEXT)
+========================
+In die Beschreibung kommt ALLES, was nicht zur Bezeichnung gehört:
+
+- Mengenangaben (ml/g/kg/Stück/Set/Packung) NUR wenn sichtbar
+- Größenangaben (cm/mm) NUR wenn sichtbar oder mit Maßband/Lineal im Bild
+  (wenn keine Referenz sichtbar: NICHT raten)
+- MHD (Mindestens haltbar bis) NUR wenn klar sichtbar, Format MM/JJJJ oder TT.MM.JJJJ
+- Verpackung / Zubehör / Lieferumfang (nur wenn sichtbar)
+- neutrale Zustandsbeschreibung (nur wenn sichtbar)
+- Ergänzungen aus weiteren Fotos (fehlende Infos ergänzen, nichts erfinden)
+
+TEXT: 1–3 kurze, sachliche Sätze.
+
+========================
+KATEGORIE
+========================
+GENAU eine aus dieser Liste:
+{", ".join(CATEGORIES)}
+
+========================
+PREIS
+========================
+PRICE_EUR = realistischer tagesaktueller Neupreis in EUR.
+- eher leicht höher schätzen als zu niedrig
+- Zahl mit Punkt als Dezimaltrenner (z. B. 129.99)
+
+========================
+ANTWORTFORMAT (PFLICHT)
+========================
+Antworte IMMER und NUR in diesem Format:
+
+NAME=...
+TEXT=...
+CATEGORY=...
+PRICE_EUR=...
+
+Keine zusätzlichen Zeilen. Keine Erklärungen. Keine Fantasie.
+""".strip()
 
 
-def encode_image(path: str) -> str:
-    return base64.b64encode(Path(path).read_bytes()).decode("utf-8")
+def _encode_image_to_b64(image_path: str) -> str:
+    with open(image_path, "rb") as f:
+        return base64.b64encode(f.read()).decode("utf-8")
 
 
-def _clean_line(s: str) -> str:
-    s = s.replace("\n", " ").replace("\r", " ")
-    return " ".join(s.split()).strip(' "').strip(".")
-
-
-def _trim_len(s: str, max_len: int) -> str:
-    return s if len(s) <= max_len else s[:max_len - 3].rstrip() + "..."
-
-
-def _parse_name_text_price(raw: str, art_id: str):
-    default_name = f"Artikel {art_id}"
-    default_desc = "Artikel wie abgebildet, Details bitte den Fotos entnehmen."
-    default_price = 0.0
-
-    name, desc, price = None, None, None
-
-    m_name = re.search(r"NAME\s*=\s*(.+?)(?=\n|TEXT|PRICE_EUR|$)", raw, re.DOTALL)
-    m_desc = re.search(r"TEXT\s*=\s*(.+?)(?=\n|PRICE_EUR|$)", raw, re.DOTALL)
-    m_price = re.search(r"PRICE_EUR\s*=\s*([0-9]+(?:[.,][0-9]+)?)", raw)
-
-    if m_name:
-        name = m_name.group(1).strip()
-
-    if m_desc:
-        desc = m_desc.group(1).strip()
-
-    if m_price:
-        p = m_price.group(1).replace(",", ".")
-        try:
-            price = float(p)
-        except:
-            price = None
+def _parse_response(text: str) -> Optional[Dict[str, Any]]:
+    name = re.search(r"NAME\s*=\s*(.*)", text)
+    desc = re.search(r"TEXT\s*=\s*(.*)", text)
+    cat = re.search(r"CATEGORY\s*=\s*(.*)", text)
+    price = re.search(r"PRICE_EUR\s*=\s*([0-9]+(?:\.[0-9]+)?)", text)
 
     if not name:
-        name = default_name
-    if not desc:
-        desc = default_desc
-    if price is None:
-        price = default_price
+        return None
 
-    name = _clean_line(name)
-    desc = _clean_line(desc)
+    title = (name.group(1).strip() if name else "").strip()
+    description = (desc.group(1).strip() if desc else "").strip()
+    category = (cat.group(1).strip() if cat else "").strip()
 
-    name = _trim_len(name, 80)
-    desc = _trim_len(desc, 230)
+    if category:
+        allowed_lower = {c.lower(): c for c in CATEGORIES}
+        if category.lower() in allowed_lower:
+            category = allowed_lower[category.lower()]
+        else:
+            category = "Sonstiges"
+    else:
+        category = ""
 
-    return name, desc, price
+    retail = 0.0
+    if price:
+        try:
+            retail = float(price.group(1))
+        except Exception:
+            retail = 0.0
+
+    return {
+        "title": title,
+        "description": description,
+        "category": category,
+        "retail_price": retail,
+    }
 
 
-def generate_meta(image_path: str, art_id: str) -> dict:
+def generate_meta(image_path: str, art_id: str, context: Dict[str, Any] | None = None) -> Optional[Dict[str, Any]]:
     if not OPENAI_API_KEY:
-        print("[KI] Kein OPENAI_API_KEY gesetzt!")
-        return {
-            "title": f"Artikel {art_id}",
-            "description": "Artikel wie abgebildet, Details bitte den Fotos entnehmen.",
-            "retail_price": 0.0,
-        }
+        print("[KI] Fehler: OPENAI_API_KEY fehlt")
+        return None
 
-    b64 = encode_image(image_path)
+    context = context or {}
+    ctx_title = (context.get("titel") or context.get("title") or "").strip()
+    ctx_desc = (context.get("beschreibung") or context.get("description") or "").strip()
+    ctx_cat = (context.get("kategorie") or context.get("category") or "").strip()
 
-    prompt = (
-        "Du schreibst Produkttexte für MyAuktion.com.\n"
-        "Analysiere das Produktbild und gib GENAU DREI Zeilen aus:\n\n"
-        "NAME=<sehr kurzer deutscher Produktname>\n"
-        "TEXT=<kurze neutrale Produktbeschreibung, 1 Satz>\n"
-        "PRICE_EUR=<typischer NEUPREIS in Euro, lieber etwas höher angesetzt>\n\n"
-        "Keine Erklärungen, keine Zusatzzeilen."
-    )
+    ctx_text = ""
+    if ctx_title or ctx_desc or ctx_cat:
+        ctx_text = f"""Bisherige Daten (kann unvollständig sein):
+NAME_ALT: {ctx_title}
+TEXT_ALT: {ctx_desc}
+CATEGORY_ALT: {ctx_cat}
+
+Aufgabe:
+- Verwende das neue Foto, um fehlende Details zu ERGÄNZEN oder zu KORRIGIEREN.
+- NAME bleibt strikt: Marke Produktbezeichnung Typenbezeichnung.
+- Details (Menge, Maße z.B. 23 cm, MHD, Set, Zubehör) gehören in TEXT – nur wenn sichtbar.
+- Wenn etwas nicht sichtbar ist: NICHT raten.
+"""
+
+    b64 = _encode_image_to_b64(image_path)
 
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",
@@ -92,46 +173,38 @@ def generate_meta(image_path: str, art_id: str) -> dict:
     }
 
     payload = {
-    "model": MODEL,
-    "messages": [
-        {"role": "system", "content": prompt},
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "Bitte nur NAME=..., TEXT=..., PRICE_EUR=..."},
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:image/jpeg;base64,{b64}"
-                    }
-                }
-            ],
-        },
-    ],
-    "temperature": 0.2,
-    "max_tokens": 300,
-}
+        "model": MODEL,
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Bitte streng im Format antworten (NAME/TEXT/CATEGORY/PRICE_EUR).\n\n" + ctx_text},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": "low"}},
+                ],
+            },
+        ],
+        "temperature": 0.2,
+        "max_tokens": 220,
+    }
 
-    start = time.time()
     try:
-        r = requests.post(OPENAI_URL, json=payload, headers=headers, timeout=12)
+        r = requests.post(OPENAI_URL, json=payload, headers=headers, timeout=25)
+
+        if r.status_code != 200:
+            print("[KI-DEBUG] HTTP:", r.status_code)
+            print("[KI-DEBUG] BODY:", r.text)
+
         r.raise_for_status()
-        result = r.json()["choices"][0]["message"]["content"]
+
+        content = r.json()["choices"][0]["message"]["content"]
+        parsed = _parse_response(content)
+        if not parsed:
+            print("[KI] Fehler: Antwort konnte nicht geparst werden")
+            return None
+
+        return parsed
+
     except Exception as e:
         print("[KI] Fehler:", e)
-        return {
-            "title": f"Artikel {art_id}",
-            "description": "Artikel wie abgebildet, Details bitte den Fotos entnehmen.",
-            "retail_price": 0.0,
-        }
-
-    dur = int((time.time() - start) * 1000)
-    print(f"[KI] Artikel {art_id}: KI-Zeit {dur} ms")
-
-    name, desc, price = _parse_name_text_price(result, art_id)
-
-    return {
-        "title": name,
-        "description": desc,
-        "retail_price": float(price),
-    }
+        return None
