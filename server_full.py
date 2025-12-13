@@ -56,34 +56,6 @@ COST_PER_SUCCESS_CALL_EUR = float((os.getenv("KI_COST_PER_SUCCESS_CALL_EUR", "0.
 
 app.mount("/static", StaticFiles(directory=str(BASE_DIR)), name="static")
 
-# ----------------------------
-# iOS / PWA Assets (Root paths)
-# iOS Safari erwartet häufig /apple-touch-icon.png direkt im Root.
-# ----------------------------
-@app.get("/apple-touch-icon.png")
-def apple_touch_icon():
-    p = BASE_DIR / "apple-touch-icon.png"
-    if not p.exists():
-        p = BASE_DIR / "static" / "apple-touch-icon.png"
-    return FileResponse(str(p), headers={"Cache-Control": "public, max-age=86400"})
-
-
-@app.get("/favicon.ico")
-def favicon_ico():
-    # Wir liefern bewusst die .ico aus (Safari/Windows kompatibel)
-    p = BASE_DIR / "my_icon.ico"
-    if not p.exists():
-        p = BASE_DIR / "favicon.ico"
-    return FileResponse(str(p), headers={"Cache-Control": "public, max-age=86400"})
-
-
-@app.get("/site.webmanifest")
-def site_manifest():
-    p = BASE_DIR / "site.webmanifest"
-    if not p.exists():
-        p = BASE_DIR / "static" / "site.webmanifest"
-    return FileResponse(str(p), headers={"Cache-Control": "public, max-age=86400"})
-
 
 # ----------------------------
 # Admin Auth
