@@ -2,127 +2,234 @@
 <html lang="de">
 <head>
   <meta charset="utf-8">
-  <title>MyAuktion · Admin</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>MyAuktion · KI-Kontrolle</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body {
+      min-height: 100vh;
+      background:
+        radial-gradient(1200px 600px at 80% -10%, #e7f1ff 0%, transparent 60%),
+        linear-gradient(135deg, #0ea5e9 0%, #1d4ed8 60%, #0b1120 100%);
+      color: #e5e7eb;
+    }
+    .glass {
+      background: rgba(15,23,42,0.85);
+      backdrop-filter: blur(14px);
+      border: 1px solid rgba(148,163,184,0.35);
+    }
+    .btn {
+      border-radius: 999px;
+      padding: .35rem .9rem;
+      font-size: .8rem;
+      font-weight: 600;
+      display: inline-flex;
+      align-items: center;
+      gap: .35rem;
+      cursor: pointer;
+      transition: .15s;
+      white-space: nowrap;
+    }
+    .btn:hover { transform: translateY(-1px); opacity: .95; }
+    .btn-primary {
+      background: #22c55e;
+      color: #022c22;
+      box-shadow: 0 8px 25px rgba(21,128,61,.5);
+    }
+    .btn-ghost {
+      background: transparent;
+      border: 1px solid rgba(148,163,184,.5);
+      color: #e5e7eb;
+    }
+    .badge {
+      font-size: .7rem;
+      padding: .15rem .5rem;
+      border-radius: 999px;
+    }
+    .badge-red {
+      background: #b91c1c;
+      color: #fee2e2;
+    }
+    .badge-green {
+      background: #166534;
+      color: #bbf7d0;
+    }
+    .toast {
+      position: fixed;
+      right: 12px;
+      bottom: 12px;
+      background: #0b1120;
+      color: #e5e7eb;
+      border-radius: 999px;
+      border: 1px solid rgba(148,163,184,.6);
+      padding: .4rem .9rem;
+      font-size: .8rem;
+      display: none;
+      box-shadow: 0 10px 30px rgba(0,0,0,.7);
+      z-index: 40;
+    }
+  </style>
 </head>
+<body class="antialiased">
+  <div class="toast" id="toast"></div>
 
-<body class="min-h-screen bg-slate-900 text-white">
-
-<div class="max-w-5xl mx-auto px-4 py-6">
-
-  <header class="flex items-center justify-between mb-6">
-    <div class="text-xl font-bold">MyAuktion · Admin</div>
-    <a href="/" class="underline text-sm opacity-80">← zurück</a>
-  </header>
-
-  <!-- LOGIN -->
-  <section id="login" class="bg-slate-800 rounded-xl p-5 max-w-md mx-auto">
-    <h2 class="font-semibold mb-3">Admin Zugriff</h2>
-    <input id="token" type="password" placeholder="Admin Token"
-           class="w-full p-2 rounded text-black mb-3">
-    <button id="btn-login"
-            class="bg-white text-slate-900 font-semibold px-4 py-2 rounded w-full">
-      Anmelden
-    </button>
-    <div id="err" class="text-red-400 text-sm mt-2 hidden">
-      Ungültiger Token
-    </div>
-  </section>
-
-  <!-- DASHBOARD -->
-  <section id="dash" class="hidden">
-
-    <!-- BUDGET -->
-    <div class="grid md:grid-cols-3 gap-4 mb-6">
-      <div class="bg-slate-800 rounded-xl p-4">
-        <div class="text-sm opacity-70">Budget</div>
-        <div id="b-budget" class="text-2xl font-bold">–</div>
-      </div>
-      <div class="bg-slate-800 rounded-xl p-4">
-        <div class="text-sm opacity-70">Verbraucht (Schätzung)</div>
-        <div id="b-spent" class="text-2xl font-bold text-yellow-400">–</div>
-      </div>
-      <div class="bg-slate-800 rounded-xl p-4">
-        <div class="text-sm opacity-70">Restbudget</div>
-        <div id="b-rest" class="text-2xl font-bold text-green-400">–</div>
-      </div>
-    </div>
-
-    <!-- KI STATUS -->
-    <div class="bg-slate-800 rounded-xl p-5 mb-6">
-      <h3 class="font-semibold mb-3">KI Status</h3>
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div>
-          <div class="text-xs opacity-70">Erfolgreich</div>
-          <div id="b-ok" class="text-xl font-bold text-green-400">–</div>
-        </div>
-        <div>
-          <div class="text-xs opacity-70">Fehlgeschlagen</div>
-          <div id="b-fail" class="text-xl font-bold text-red-400">–</div>
-        </div>
-        <div>
-          <div class="text-xs opacity-70">Kosten / Call</div>
-          <div id="b-cost" class="text-xl font-bold">–</div>
+  <div class="max-w-6xl mx-auto px-3 py-4 md:py-6">
+    <header class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-5">
+      <div>
+        <div class="flex items-center gap-2 mb-1">
+          <div class="w-9 h-9 rounded-full bg-white flex items-center justify-center text-xs font-bold text-sky-700 shadow-lg">
+            MA
+          </div>
+          <div>
+            <h1 class="text-lg md:text-xl font-semibold">MyAuktion · KI-Kontrolle</h1>
+            <p class="text-xs text-slate-200/80">
+              KI-Vorschläge prüfen, Texte anpassen, Artikel freigeben.
+            </p>
+          </div>
         </div>
       </div>
-    </div>
+      <div class="flex items-center gap-2">
+        <select id="filter-status" class="bg-slate-900/60 border border-slate-600 text-xs rounded-full px-3 py-1.5">
+          <option value="unreviewed">Nur ungeprüfte</option>
+          <option value="all">Alle</option>
+        </select>
+        <button id="btn-reload" class="btn btn-ghost">
+          🔄 Neu laden
+        </button>
+      </div>
+    </header>
 
-    <!-- ARTIKEL -->
-    <div class="bg-slate-800 rounded-xl p-5">
-      <h3 class="font-semibold mb-3">Artikelübersicht</h3>
-      <div id="list" class="text-sm space-y-2"></div>
-    </div>
+    <main class="glass rounded-3xl p-3 md:p-4 shadow-2xl">
+      <div id="list" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3"></div>
+    </main>
+  </div>
 
-  </section>
+  <script>
+    const listEl = document.getElementById('list');
+    const filterStatus = document.getElementById('filter-status');
+    const btnReload = document.getElementById('btn-reload');
+    const toast = document.getElementById('toast');
 
-</div>
+    function showToast(msg) {
+      toast.textContent = msg;
+      toast.style.display = 'block';
+      setTimeout(() => { toast.style.display = 'none'; }, 1800);
+    }
 
-<script>
-const login = document.getElementById("login");
-const dash  = document.getElementById("dash");
-const err   = document.getElementById("err");
-let TOKEN = "";
+    async function loadArticles() {
+      const status = filterStatus.value;
+      listEl.innerHTML = '<div class="text-xs text-slate-200/80 p-2">Lade Artikel...</div>';
+      try {
+        const res = await fetch('/api/admin/articles?status=' + encodeURIComponent(status));
+        const j = await res.json();
+        if (!res.ok || !j.ok) {
+          listEl.innerHTML = '<div class="text-xs text-red-200 p-2">Fehler beim Laden.</div>';
+          return;
+        }
+        renderList(j.items || []);
+      } catch (e) {
+        console.error(e);
+        listEl.innerHTML = '<div class="text-xs text-red-200 p-2">Server nicht erreichbar.</div>';
+      }
+    }
 
-document.getElementById("btn-login").onclick = async () => {
-  TOKEN = document.getElementById("token").value.trim();
-  if (!TOKEN) return;
+    function renderList(items) {
+      if (!items.length) {
+        listEl.innerHTML = '<div class="text-xs text-slate-200/80 p-2">Keine Artikel gefunden.</div>';
+        return;
+      }
+      listEl.innerHTML = '';
+      items.forEach(item => {
+        const card = document.createElement('div');
+        card.className = 'glass rounded-2xl border border-slate-700/70 p-2.5 flex flex-col gap-2.5';
 
-  const h = { "X-Admin-Token": TOKEN };
+        const header = document.createElement('div');
+        header.className = 'flex items-center justify-between gap-2 text-xs';
+        header.innerHTML = `
+          <div>Artikel <span class="font-semibold text-white">${item.artikelnr}</span></div>
+          <div class="badge ${item.reviewed ? 'badge-green' : 'badge-red'}">
+            ${item.reviewed ? '✅ geprüft' : '⚠️ ungeprüft'}
+          </div>
+        `;
+        card.appendChild(header);
 
-  // Budget
-  const b = await fetch("/api/admin/budget", { headers: h });
-  if (!b.ok) { err.classList.remove("hidden"); return; }
-  const bj = await b.json();
+        const thumbWrap = document.createElement('div');
+        thumbWrap.className = 'w-full rounded-xl overflow-hidden border border-slate-700/70 bg-slate-900/80 flex items-center justify-center aspect-[4/3]';
+        if (item.image) {
+          const img = document.createElement('img');
+          img.src = item.image;
+          img.className = 'max-w-full max-h-full';
+          thumbWrap.appendChild(img);
+        } else {
+          const span = document.createElement('span');
+          span.className = 'text-[11px] text-slate-400';
+          span.textContent = 'Kein Bild vorhanden';
+          thumbWrap.appendChild(span);
+        }
+        card.appendChild(thumbWrap);
 
-  // Artikel
-  const a = await fetch("/api/admin/articles", { headers: h });
-  const aj = await a.json();
+        const titleField = document.createElement('div');
+        titleField.className = 'flex flex-col gap-1 mt-1';
+        titleField.innerHTML = `
+          <label class="text-[11px] text-slate-300">Bezeichnung</label>
+          <input type="text"
+                 class="w-full rounded-lg bg-slate-950/60 border border-slate-600/80 px-2 py-1 text-xs text-slate-50"
+                 value="${(item.titel || '').replace(/"/g,'&quot;')}">
+        `;
+        card.appendChild(titleField);
 
-  login.classList.add("hidden");
-  dash.classList.remove("hidden");
+        const descField = document.createElement('div');
+        descField.className = 'flex flex-col gap-1';
+        descField.innerHTML = `
+          <label class="text-[11px] text-slate-300">Beschreibung</label>
+          <textarea rows="3"
+                 class="w-full rounded-lg bg-slate-950/60 border border-slate-600/80 px-2 py-1 text-[11px] text-slate-50 resize-vertical">${item.beschreibung || ''}</textarea>
+        `;
+        card.appendChild(descField);
 
-  document.getElementById("b-budget").textContent = bj.budget_eur.toFixed(2) + " €";
-  document.getElementById("b-spent").textContent  = bj.spent_est_eur.toFixed(2) + " €";
-  document.getElementById("b-rest").textContent   = bj.remaining_est_eur.toFixed(2) + " €";
-  document.getElementById("b-ok").textContent     = bj.success_calls;
-  document.getElementById("b-fail").textContent   = bj.failed_calls;
-  document.getElementById("b-cost").textContent   = bj.cost_per_success_call_eur + " €";
+        const actions = document.createElement('div');
+        actions.className = 'flex items-center justify-between gap-2 mt-2';
+        const info = document.createElement('div');
+        info.className = 'text-[11px] text-slate-400';
+        info.textContent = 'Prüfen, anpassen, dann speichern.';
+        const btnSave = document.createElement('button');
+        btnSave.className = 'btn btn-primary';
+        btnSave.textContent = '💾 Speichern & prüfen';
+        btnSave.addEventListener('click', async () => {
+          const newTitle = titleField.querySelector('input').value.trim();
+          const newDesc  = descField.querySelector('textarea').value.trim();
+          try {
+            const res = await fetch('/api/admin/articles/update', {
+              method: 'POST',
+              headers: {'Content-Type':'application/json'},
+              body: JSON.stringify({
+                artikelnr: item.artikelnr,
+                titel: newTitle,
+                beschreibung: newDesc,
+                reviewed: true
+              })
+            });
+            const j = await res.json();
+            if (!res.ok || !j.ok) throw new Error(j.error || res.status);
+            showToast('Artikel ' + item.artikelnr + ' gespeichert.');
+            loadArticles();
+          } catch (e) {
+            console.error(e);
+            showToast('Fehler beim Speichern.');
+          }
+        });
+        actions.appendChild(info);
+        actions.appendChild(btnSave);
+        card.appendChild(actions);
 
-  const list = document.getElementById("list");
-  list.innerHTML = "";
-  aj.items.forEach(it => {
-    const div = document.createElement("div");
-    div.className = "border-b border-white/10 pb-1";
-    div.innerHTML =
-      `<b>${it.artikelnr}</b> · ${it.titel || "(kein Titel)"}<br>
-       <span class="opacity-70">
-         KI: ${it.ki_source} · Preis: ${it.retail_price} € → ${it.rufpreis} €
-       </span>`;
-    list.appendChild(div);
-  });
-};
-</script>
+        listEl.appendChild(card);
+      });
+    }
 
+    filterStatus.addEventListener('change', loadArticles);
+    btnReload.addEventListener('click', loadArticles);
+
+    document.addEventListener('DOMContentLoaded', loadArticles);
+  </script>
 </body>
 </html>
