@@ -313,12 +313,14 @@ def _run_meta_background(artikelnr: str, img_path: Path) -> None:
 # ----------------------------
 @app.get("/")
 def root():
-    html = (BASE_DIR / "app.html").read_text("utf-8")
-    return Response(content=html, media_type="text/html", headers={"Cache-Control":"no-store, no-cache, must-revalidate","Pragma":"no-cache","Expires":"0"})
+    return FileResponse(str(BASE_DIR / "index.html"))
+
+
 @app.get("/admin")
 def admin_root():
-    html = (BASE_DIR / "admin.html").read_text("utf-8")
-    return Response(content=html, media_type="text/html", headers={"Cache-Control":"no-store, no-cache, must-revalidate","Pragma":"no-cache","Expires":"0"})
+    return FileResponse(str(BASE_DIR / "admin.html"))
+
+
 @app.get("/api/health")
 def health():
     return {"ok": True}
@@ -527,7 +529,7 @@ def describe(artikelnr: str):
     _save_meta_json(artikelnr, mj)
     _usage_fail(mj["ki_last_error"])
     _rebuild_csv_export()
-    return JSONResponse({"ok": False, "error": mj["ki_last_error"]}, status_code=502)
+    return JSONResponse({"ok": False, "error": mj["ki_last_error"]}, status_code=200)
 
 
 # ----------------------------
@@ -606,8 +608,3 @@ def admin_articles(request: Request, category: str = "", only_failed: int = 0):
 
     items.sort(key=_sort_key)
     return {"ok": True, "items": items}
-
-
-@app.get("/api/version")
-def api_version():
-    return {"ok": True, "build": "20251214-094057"}

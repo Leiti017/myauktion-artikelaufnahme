@@ -1,9 +1,14 @@
 <!doctype html>
 <html lang="de">
 <head>
+    <!-- build:20251214_112738 -->
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>MyAuktion · Admin</title>
+  <title>MyAuktion Admin • 20251214_112738</title>
   <link rel="icon" type="image/x-icon" href="/static/my_icon.ico">
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
@@ -155,8 +160,25 @@
   const fQ = document.getElementById('f-q');
   const btnRefresh = document.getElementById('btn-refresh');
 
-  function getToken(){ return localStorage.getItem("MYAUKTION_ADMIN_TOKEN") || ""; }
-  function setToken(t){ localStorage.setItem("MYAUKTION_ADMIN_TOKEN", t); }
+function getToken(){
+  // Safari/Privatmodus kann localStorage zicken -> zusätzlich Token per URL erlauben
+  try{
+    const qs = new URLSearchParams(location.search);
+    const t = qs.get("t");
+    if(t && t.length > 10){
+      localStorage.setItem("MYAUKTION_ADMIN_TOKEN", t);
+      return t;
+    }
+    return localStorage.getItem("MYAUKTION_ADMIN_TOKEN") || "";
+  }catch(e){
+    // Fallback: nur URL
+    const qs = new URLSearchParams(location.search);
+    return qs.get("t") || "";
+  }
+}
+function setToken(t){
+  try{ localStorage.setItem("MYAUKTION_ADMIN_TOKEN", t); }catch(e){}
+}
 
   async function api(path){
     const t = getToken();
