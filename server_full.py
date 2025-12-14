@@ -1,3 +1,20 @@
+
+
+def _normalize_title(title: str) -> str:
+    t = (title or "").strip()
+    bad = [
+        "Typenbezeichnung", "typenbezeichnung",
+        "Typ", "typ", "Type", "type",
+        "Model", "model", "Modell", "modell",
+    ]
+    parts = [p for p in re.split(r"\s+", t) if p]
+    while parts and parts[-1] in bad:
+        parts.pop()
+    t = " ".join(parts).strip()
+    t = re.sub(r"\bTypenbezeichnung\b", "", t, flags=re.I)
+    t = re.sub(r"\s(2,)", " ", t).strip()
+    return t
+
 # server_full.py – MyAuktion KI-Artikelaufnahme-System (FINAL)
 # Features:
 # - Upload + sofortige Vorschau (Frontend)
@@ -271,7 +288,7 @@ def _run_meta_once(artikelnr: str, img_path: Path) -> Tuple[Optional[Dict[str, A
 
 
 def _apply_ki_to_meta(mj: Dict[str, Any], meta: Dict[str, Any]) -> None:
-    mj["titel"] = meta.get("title", "").strip()
+    mj["titel"] = _normalize_title(meta.get("title", "")).strip()
     mj["beschreibung"] = meta.get("description", "").strip()
     mj["kategorie"] = meta.get("category", "").strip()
 
@@ -529,7 +546,7 @@ def describe(artikelnr: str):
     _save_meta_json(artikelnr, mj)
     _usage_fail(mj["ki_last_error"])
     _rebuild_csv_export()
-    return JSONResponse({"ok": False, "error": mj["ki_last_error"]}, status_code=200)
+    return JSONResponse({"ok": False, "error": mj["ki_last_error"]}, status_code=502)
 
 
 # ----------------------------

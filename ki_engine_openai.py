@@ -189,7 +189,7 @@ Aufgabe:
     }
 
     try:
-        r = requests.post(OPENAI_URL, json=payload, headers=headers, timeout=45)
+        r = requests.post(OPENAI_URL, json=payload, headers=headers, timeout=25)
 
         if r.status_code != 200:
             print("[KI-DEBUG] HTTP:", r.status_code)
@@ -205,55 +205,6 @@ Aufgabe:
 
         return parsed
 
-    except Exception as e:
-        print("[KI] Fehler:", e)
-        return None
-
-
-# --- Multi-Image Fusion Extension (build 20251214_112738) ---
-def generate_meta_multi(image_paths: list[str], art_id: str, context: dict | None = None):
-    if not image_paths:
-        return None
-    if len(image_paths) == 1:
-        return generate_meta(image_paths[0], art_id, context=context)
-
-    context = context or {}
-    ctx_title = (context.get("titel") or context.get("title") or "").strip()
-    ctx_desc = (context.get("beschreibung") or context.get("description") or "").strip()
-    ctx_cat = (context.get("kategorie") or context.get("category") or "").strip()
-
-    ctx_text = ""
-    if ctx_title or ctx_desc or ctx_cat:
-        ctx_text = f"""Bisherige Daten:\nNAME_ALT: {ctx_title}\nTEXT_ALT: {ctx_desc}\nCATEGORY_ALT: {ctx_cat}\n\nErgänze Details aus Foto 2/3 (Seriennummer/Zubehör/ml/MHD/Größe). NICHT raten. Preis darf nicht sinken.\n"""
-
-    headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
-        "Content-Type": "application/json",
-    }
-
-    content = [{"type": "text", "text": "Antwortformat streng: NAME/TEXT/CATEGORY/PRICE_EUR.\n" + ctx_text}]
-    for p in image_paths[:3]:
-        b64 = _encode_image_to_b64(p)
-        content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": "low"}})
-
-    payload = {
-        "model": MODEL,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": content},
-        ],
-        "temperature": 0.2,
-        "max_tokens": 260,
-    }
-
-    try:
-        r = requests.post(OPENAI_URL, json=payload, headers=headers, timeout=45)
-        if r.status_code != 200:
-            print("[KI-DEBUG] HTTP:", r.status_code)
-            print("[KI-DEBUG] BODY:", r.text)
-        r.raise_for_status()
-        content_txt = r.json()["choices"][0]["message"]["content"]
-        return _parse_response(content_txt)
     except Exception as e:
         print("[KI] Fehler:", e)
         return None
