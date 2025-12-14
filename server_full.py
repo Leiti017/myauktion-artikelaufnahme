@@ -225,7 +225,7 @@ def _rebuild_csv_export() -> None:
 # ----------------------------
 # KI (1 Versuch, kein Fallback, mit Kontext fürs 2. Foto)
 # ----------------------------
-def _run_meta_once(artikelnr: str, img_path: Path) -> Tuple[Optional[Dict[str, Any]], bool, str, int]:
+def _run_meta_once(artikelnr: str, img_paths: list[Path]) -> Tuple[Optional[Dict[str, Any]], bool, str, int]:
     """Return (meta, ok, error, runtime_ms)"""
     try:
         import ki_engine_openai as ki_engine
@@ -238,7 +238,7 @@ def _run_meta_once(artikelnr: str, img_path: Path) -> Tuple[Optional[Dict[str, A
 
     start = time.time()
     try:
-        meta = ki_engine.generate_meta(str(img_path), str(artikelnr), context=current)
+        meta = ki_engine.generate_meta_multi([str(p) for p in img_paths], str(artikelnr), context=current)
         runtime_ms = int((time.time() - start) * 1000)
 
         if not meta:
@@ -275,32 +275,33 @@ def _apply_ki_to_meta(mj: Dict[str, Any], meta: Dict[str, Any]) -> None:
     mj["beschreibung"] = meta.get("description", "").strip()
     mj["kategorie"] = meta.get("category", "").strip()
 
-    retail_new = float(meta.get("retail_price", 0.0) or 0.0)
-    retail_old = float(mj.get("retail_price", 0.0) or 0.0)
-
-    # Preis-Strategie bei Foto2/Fusion:
-    # - Nie nach unten überschreiben (Side-Photo kann zu 1€ führen)
-    # - Erlaubt ist eine Erhöhung, wenn KI beim Detailfoto mehr erkennt
-    retail_f = retail_old
-    if retail_old <= 0 and retail_new > 0:
-        retail_f = retail_new
-    elif retail_new > retail_old:
-        retail_f = retail_new
-
+    retail_f = float(meta.get("retail_price", 0.0) or 0.0)
     mj["retail_price"] = round(retail_f, 2)
 
     # Rufpreis: 20% auf ganze € aufrunden
     mj["rufpreis"] = float(math.ceil(retail_f * 0.20)) if retail_f > 0 else 0.0
 
 
-
-def _run_meta_background(artikelnr: str, img_path: Path) -> None:
+def _run_meta_background(artikelnr: str) -> None:  # Fusion: nutzt die letzten 2 Fotos
     print(f"[BG-KI] Starte Hintergrund-KI für Artikel {artikelnr}")
-    meta, ok, err, runtime_ms = _run_meta_once(artikelnr, img_path)
+    imgs = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
+    # Fusion: für Speed nur die letzten 2 Fotos (Front + Details)
+    img_paths = imgs[-2:] if len(imgs) >= 2 else imgs
+    meta = None
+    ok = False
+    err = ""
+    runtime_ms = 0
+    for attempt in range(1, 4):
+        meta, ok, err, runtime_ms = _run_meta_once(artikelnr, img_paths)
+        if ok and meta:
+            break
+        # kurze Backoff-Pause, damit 429/Netz sich fängt
+        time.sleep(1.0 * attempt)
+
 
     mj = _load_meta_json(artikelnr)
     mj["ki_runtime_ms"] = runtime_ms
-    mj["last_image"] = img_path.name
+    mj["last_image"] = (img_paths[-1].name if img_paths else "")
     mj["batch_done"] = True
 
     if ok and meta:
@@ -369,9 +370,15 @@ def check_artnr(artikelnr: str):
 async def upload(
     file: UploadFile = File(...),
     artikelnr: str = Form(...),
+    allow_existing: str = Form("0"),
     background_tasks: BackgroundTasks = None,
 ):
     artikelnr = str(artikelnr).strip()
+    # HARD-SCHUTZ: existierende Artikelnummer nicht unabsichtlich erneut verwenden
+    already_meta = _meta_path(artikelnr).exists()
+    already_imgs = any(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
+    if (already_meta or already_imgs) and str(allow_existing) != "1":
+        return JSONResponse({"ok": False, "error": "Artikelnummer existiert bereits. Bitte nächste Nummer verwenden oder bewusst 'Weiter bearbeiten' wählen.", "code": "ARTNR_EXISTS"}, status_code=409)
     data = await file.read()
 
     try:
@@ -401,7 +408,7 @@ async def upload(
     _rebuild_csv_export()
 
     if background_tasks:
-        background_tasks.add_task(_run_meta_background, artikelnr, out)
+        background_tasks.add_task(_run_meta_background, artikelnr)
 
     return {"ok": True, "filename": out.name}
 
@@ -501,21 +508,22 @@ def describe(artikelnr: str):
     if not pics:
         return JSONResponse({"ok": False, "error": "Kein Bild für diese Artikelnummer gefunden."}, status_code=400)
 
-    img_path = pics[-1]
+    # Fusion: nutze die letzten 2 Fotos
+    img_paths = pics[-2:] if len(pics) >= 2 else pics
 
     # set pending for manual too
     mj = _load_meta_json(artikelnr)
     mj["ki_source"] = "pending"
     mj["ki_last_error"] = ""
     mj["batch_done"] = False
-    mj["last_image"] = img_path.name
+    mj["last_image"] = (img_paths[-1].name if img_paths else "")
     _save_meta_json(artikelnr, mj)
 
-    meta, ok, err, runtime_ms = _run_meta_once(artikelnr, img_path)
+    meta, ok, err, runtime_ms = _run_meta_once(artikelnr, img_paths)
 
     mj = _load_meta_json(artikelnr)
     mj["ki_runtime_ms"] = runtime_ms
-    mj["last_image"] = img_path.name
+    mj["last_image"] = (img_paths[-1].name if img_paths else "")
     mj["batch_done"] = True
 
     if ok and meta:
