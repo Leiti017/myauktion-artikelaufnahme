@@ -1,12 +1,9 @@
 <!doctype html>
 <html lang="de">
 <head>
-  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-  <meta http-equiv="Pragma" content="no-cache">
-  <meta http-equiv="Expires" content="0">
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>MyAuktion · Artikelaufnahme (App)</title>
+  <title>MyAuktion · Artikelaufnahme</title>
 
   <link rel="icon" type="image/x-icon" href="/static/my_icon.ico">
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
@@ -88,11 +85,6 @@
             <label class="block mb-1 text-xs opacity-80">Artikelnummer (mind. 6-stellig)</label>
             <input id="f-artikelnr" type="number" inputmode="numeric" class="input" autocomplete="off" placeholder="z.B. 810233">
             <div id="artnr-hint" class="text-[11px] text-white/80 mt-1"></div>
-            <div id="artnr-exists" class="hidden mt-2 rounded-xl border border-red-300/60 bg-red-500/20 p-2 text-[12px]">
-              <div class="font-semibold text-red-100">⚠ Artikelnummer existiert bereits</div>
-              <div class="text-red-100/90">Bitte nimm die nächste Nummer – oder wenn du bewusst Foto 2/3 zum selben Artikel machst:</div>
-              <button id="btn-continue-existing" type="button" class="mt-2 bg-white text-slate-900 font-semibold px-3 py-1.5 rounded-lg">Weiter bearbeiten</button>
-            </div>
           </div>
           <div>
             <label class="block mb-1 text-xs opacity-80">Lagerort</label>
@@ -180,10 +172,6 @@
 
 <script>
   const fArt = document.getElementById('f-artikelnr');
-  const artExistsBox = document.getElementById('artnr-exists');
-  const btnContinueExisting = document.getElementById('btn-continue-existing');
-  let allowExistingArtNr = null;
-
   const artHint = document.getElementById('artnr-hint');
   const fLager = document.getElementById('f-lagerort');
   const fEinl = document.getElementById('f-einlieferer');
@@ -233,29 +221,6 @@
     else { statusPill.classList.add('hidden'); }
   }
 
-  async function deleteImage(filename){
-    const art = (fArt.value||"").trim();
-    if(!art || !filename) return;
-    try{
-      log("🗑 Lösche Foto: " + filename);
-      const res = await fetch(`/api/image?artikelnr=${encodeURIComponent(art)}&filename=${encodeURIComponent(filename)}`, { method:'DELETE' });
-      const j = await res.json();
-      if(!res.ok || !j.ok){
-        log("❌ Löschen fehlgeschlagen: " + (j.error || res.status));
-        toast("Löschen fehlgeschlagen");
-        return;
-      }
-      toast("Foto gelöscht");
-      await refreshImages();
-      await refreshMeta(); // zeigt ggf. neues last_image
-      if(j.remaining && j.remaining.length){
-        await pollUntilDone(art, 18000);
-      }
-    }catch(e){
-      log("❌ Löschen Fehler: " + e);
-    }
-  }
-
   async function refreshImages(){
     const art = (fArt.value||"").trim();
     if(!art) return;
@@ -263,26 +228,12 @@
     const j = await res.json();
     imgStrip.innerHTML = '';
     (j.files||[]).forEach(url=>{
-      const fn = (url.split('/').pop()||'').split('?')[0];
-      const wrap = document.createElement('div');
-      wrap.className = 'inline-flex flex-col items-center gap-1 mr-2';
-
       const img = document.createElement('img');
       img.src = url;
       img.onclick = ()=> thumb.innerHTML = `<img src="${url}">`;
-
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'text-[11px] px-2 py-1 rounded bg-red-500/30 border border-red-300/40 hover:bg-red-500/40';
-      btn.textContent = (j.files||[]).length > 1 ? 'Foto löschen' : 'Foto löschen';
-      btn.onclick = ()=> deleteImage(fn);
-
-      wrap.appendChild(img);
-      wrap.appendChild(btn);
-      imgStrip.appendChild(wrap);
+      imgStrip.appendChild(img);
     });
   }
-
 
   async function refreshMeta(){
     const art = (fArt.value||"").trim();
@@ -332,26 +283,6 @@
     statusText.textContent = "KI dauert länger – du kannst trotzdem weitermachen.";
   }
 
-  async function checkArtNrExists(){
-    const v = (fArt.value||"").trim();
-    if(!v){ artExistsBox.classList.add('hidden'); return; }
-    try{
-      const res = await fetch('/api/check_artnr?artikelnr=' + encodeURIComponent(v));
-      const j = await res.json();
-      const exists = !!(j && j.ok && j.exists);
-      if(exists && allowExistingArtNr !== v) artExistsBox.classList.remove('hidden');
-      else artExistsBox.classList.add('hidden');
-    }catch(e){}
-  }
-
-  btnContinueExisting.onclick = ()=>{
-    const v = (fArt.value||"").trim();
-    if(!v) return;
-    allowExistingArtNr = v;
-    artExistsBox.classList.add('hidden');
-    toast('Weiter bearbeiten aktiv');
-  };
-
   function updateArtnrHint(){
     if(!fArt.value){ artHint.textContent=""; return; }
     if(validArtNr()){
@@ -366,37 +297,13 @@
   btnPhoto.onclick = ()=> fFile.click();
   thumb.onclick = ()=> fFile.click();
 
-  fArt.addEventListener('input', ()=>{ updateArtnrHint(); checkArtNrExists(); });
+  fArt.addEventListener('input', updateArtnrHint);
   fArt.addEventListener('blur', async ()=>{
     updateArtnrHint();
-    await checkArtNrExists();
     if(!validArtNr()) return;
     await refreshImages();
     await refreshMeta();
   });
-
-  async function compressImageFile(file){
-    // Schnell: 750px MaxKante, Qualität 0.7
-    const maxDim = 750;
-    const quality = 0.7;
-    const img = document.createElement('img');
-    const dataUrl = await new Promise((resolve, reject)=>{
-      const r = new FileReader();
-      r.onload = ()=>resolve(r.result);
-      r.onerror = reject;
-      r.readAsDataURL(file);
-    });
-    img.src = dataUrl;
-    await img.decode();
-    let w = img.naturalWidth, h = img.naturalHeight;
-    const scale = Math.min(1, maxDim / Math.max(w,h));
-    w = Math.round(w*scale); h = Math.round(h*scale);
-    const c = document.createElement('canvas'); c.width=w; c.height=h;
-    const ctx = c.getContext('2d');
-    ctx.drawImage(img,0,0,w,h);
-    const blob = await new Promise(res=> c.toBlob(res, 'image/jpeg', quality));
-    return new File([blob], 'photo.jpg', {type:'image/jpeg'});
-  }
 
   fFile.addEventListener('change', async ()=>{
     if(!validArtNr()){
@@ -405,9 +312,8 @@
       return;
     }
     const art = (fArt.value||"").trim();
-    let file = fFile.files[0];
+    const file = fFile.files[0];
     if(!file) return;
-    try{ file = await compressImageFile(file); }catch(e){}
 
     // lokale Vorschau sofort
     const reader = new FileReader();
@@ -417,7 +323,6 @@
     const fd = new FormData();
     fd.append('file', file);
     fd.append('artikelnr', art);
-    fd.append('allow_existing', (allowExistingArtNr === art) ? '1' : '0');
 
     log("Upload startet …");
     setPill(true, "Upload …");
@@ -426,17 +331,10 @@
     const j = await res.json();
     if(!res.ok || !j.ok){
       setPill(false);
-      if(res.status === 409 && j && j.code === 'ARTNR_EXISTS'){
-        artExistsBox.classList.remove('hidden');
-        toast('Artikelnummer existiert');
-        log('⚠ ' + j.error);
-        return;
-      }
       alert("Upload Fehler: " + (j.error || res.status));
       return;
     }
 
-    allowExistingArtNr = art;
     log("Upload OK: " + j.filename);
     toast("Foto hochgeladen");
     await refreshImages();
@@ -451,11 +349,6 @@
     const j = await res.json();
     if(!res.ok || !j.ok){
       setPill(false);
-      if(j && j.meta){
-        log('⚠ KI gerade nicht verfügbar – zeige letzte Daten.');
-        await refreshMeta();
-        return;
-      }
       alert("KI Fehler: " + (j.error || res.status));
       return;
     }

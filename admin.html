@@ -2,242 +2,268 @@
 <html lang="de">
 <head>
   <meta charset="utf-8">
-  <title>MyAuktion · Admin · v20251214-084956</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>MyAuktion · Admin</title>
+  <link rel="icon" type="image/x-icon" href="/static/my_icon.ico">
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
-    body {
-      min-height: 100vh;
-      background:
-        radial-gradient(1200px 600px at 80% -10%, #e7f1ff 0%, transparent 60%),
-        linear-gradient(135deg, #0ea5e9 0%, #1d4ed8 60%, #0b1120 100%);
-      color: #e5e7eb;
-    }
-    .glass {
-      background: rgba(15,23,42,0.85);
-      backdrop-filter: blur(14px);
-      border: 1px solid rgba(148,163,184,0.35);
-    }
-    .btn {
-      border-radius: 999px;
-      padding: .35rem .9rem;
-      font-size: .8rem;
-      font-weight: 600;
-      display: inline-flex;
-      align-items: center;
-      gap: .35rem;
-      cursor: pointer;
-      transition: .15s;
-      white-space: nowrap;
-    }
-    .btn:hover { transform: translateY(-1px); opacity: .95; }
-    .btn-primary {
-      background: #22c55e;
-      color: #022c22;
-      box-shadow: 0 8px 25px rgba(21,128,61,.5);
-    }
-    .btn-ghost {
-      background: transparent;
-      border: 1px solid rgba(148,163,184,.5);
-      color: #e5e7eb;
-    }
-    .badge {
-      font-size: .7rem;
-      padding: .15rem .5rem;
-      border-radius: 999px;
-    }
-    .badge-red {
-      background: #b91c1c;
-      color: #fee2e2;
-    }
-    .badge-green {
-      background: #166534;
-      color: #bbf7d0;
-    }
-    .toast {
-      position: fixed;
-      right: 12px;
-      bottom: 12px;
-      background: #0b1120;
-      color: #e5e7eb;
-      border-radius: 999px;
-      border: 1px solid rgba(148,163,184,.6);
-      padding: .4rem .9rem;
-      font-size: .8rem;
-      display: none;
-      box-shadow: 0 10px 30px rgba(0,0,0,.7);
-      z-index: 40;
-    }
+    body{min-height:100vh;background:linear-gradient(135deg,#0ea5e9,#1d4ed8 60%,#1e293b);color:#fff}
+    .glass{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.16);backdrop-filter:blur(12px)}
+    .input{width:100%;padding:.55rem .8rem;border-radius:.8rem;border:1px solid rgba(255,255,255,.35);background:#fff;color:#000}
+    .btn{padding:.55rem 1rem;border-radius:999px;font-weight:700}
+    .btn-primary{background:#fff;color:#0f172a;box-shadow:0 8px 18px rgba(0,0,0,.2)}
+    .badge{font-size:.72rem;padding:.2rem .55rem;border-radius:999px}
+    .bad-red{background:rgba(239,68,68,.18);border:1px solid rgba(239,68,68,.5);color:#fecaca}
+    .bad-green{background:rgba(34,197,94,.18);border:1px solid rgba(34,197,94,.5);color:#bbf7d0}
+    .bad-yellow{background:rgba(250,204,21,.18);border:1px solid rgba(250,204,21,.55);color:#fde68a}
   </style>
 </head>
-<body class="antialiased">
-  <div class="toast" id="toast"></div>
+<body>
+<div class="max-w-6xl mx-auto px-4 py-6">
+  <header class="flex items-center justify-between mb-6">
+    <div>
+      <div class="text-2xl font-extrabold">MyAuktion · Admin</div>
+      <div class="text-xs opacity-80">Budget, Flags, Überblick & CSV</div>
+    </div>
+    <div class="flex gap-2">
+      <a href="/" class="underline text-sm opacity-90">Zur Artikelaufnahme</a>
+    </div>
+  </header>
 
-  <div class="max-w-6xl mx-auto px-3 py-4 md:py-6">
-    <header class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-5">
-      <div>
-        <div class="flex items-center gap-2 mb-1">
-          <div class="w-9 h-9 rounded-full bg-white flex items-center justify-center text-xs font-bold text-sky-700 shadow-lg">
-            MA
+  <div id="locked" class="glass rounded-3xl p-6 shadow-xl hidden">
+    <div class="text-lg font-bold mb-2">Admin geschützt</div>
+    <p class="text-sm opacity-90 mb-4">Bitte Admin-Token eingeben, damit Budget & Admin-Flags sichtbar sind.</p>
+    <div class="grid md:grid-cols-3 gap-3 items-end">
+      <div class="md:col-span-2">
+        <label class="text-xs opacity-80">Admin-Token</label>
+        <input id="token" class="input" placeholder="Token eingeben…">
+      </div>
+      <button id="btn-unlock" class="btn btn-primary w-full">Freischalten</button>
+    </div>
+    <p class="text-xs opacity-70 mt-3">Token wird lokal im Browser gespeichert (localStorage).</p>
+  </div>
+
+  <div id="content" class="hidden">
+    <section class="glass rounded-3xl p-5 shadow-xl mb-5">
+      <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+        <div>
+          <div class="text-lg font-bold">KI Budget (geschätzt)</div>
+          <div class="text-xs opacity-80">Schätzung basiert auf erfolgreichen KI-Aufrufen (fixer €/Call). OpenAI-Hardlimit steuerst du im Dashboard.</div>
+        </div>
+        <div class="flex gap-2">
+          <a href="/api/export.csv" class="btn btn-primary">CSV downloaden</a>
+          <button id="btn-refresh" class="btn btn-primary">Refresh</button>
+        </div>
+      </div>
+
+      <div class="grid md:grid-cols-5 gap-3 mt-4">
+        <div class="glass rounded-2xl p-3">
+          <div class="text-xs opacity-80">Budget</div>
+          <div id="b-budget" class="text-xl font-extrabold">–</div>
+        </div>
+        <div class="glass rounded-2xl p-3">
+          <div class="text-xs opacity-80">Verbraucht</div>
+          <div id="b-spent" class="text-xl font-extrabold">–</div>
+        </div>
+        <div class="glass rounded-2xl p-3">
+          <div class="text-xs opacity-80">Rest</div>
+          <div id="b-remaining" class="text-xl font-extrabold">–</div>
+        </div>
+        <div class="glass rounded-2xl p-3">
+          <div class="text-xs opacity-80">KI Success</div>
+          <div id="b-success" class="text-xl font-extrabold">–</div>
+        </div>
+        <div class="glass rounded-2xl p-3">
+          <div class="text-xs opacity-80">KI Fail</div>
+          <div id="b-fail" class="text-xl font-extrabold">–</div>
+        </div>
+      </div>
+
+      <div class="text-xs opacity-80 mt-3">
+        Letzter Fehler: <span id="b-lasterr" class="opacity-95">–</span>
+      </div>
+    </section>
+
+    <section class="glass rounded-3xl p-5 shadow-xl">
+      <div class="flex flex-col md:flex-row md:items-end md:justify-between gap-3">
+        <div>
+          <div class="text-lg font-bold">Artikel</div>
+          <div class="text-xs opacity-80">KI failed (rot), reviewed (grün), manuell (gelb)</div>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-2 w-full md:w-auto">
+          <div>
+            <label class="text-xs opacity-80">Kategorie</label>
+            <select id="f-cat" class="input">
+              <option value="">Alle</option>
+              <option>Parfum</option><option>Kosmetik</option><option>Werkzeug</option><option>Elektronik</option>
+              <option>Haushalt</option><option>Kleidung</option><option>Schmuck/Uhren</option><option>Spielzeug</option>
+              <option>Bücher/Medien</option><option>Sonstiges</option>
+            </select>
           </div>
           <div>
-            <h1 class="text-lg md:text-xl font-semibold">MyAuktion · KI-Kontrolle</h1>
-            <p class="text-xs text-slate-200/80">
-              KI-Vorschläge prüfen, Texte anpassen, Artikel freigeben.
-            </p>
+            <label class="text-xs opacity-80">Nur KI-Fehler</label>
+            <select id="f-failed" class="input">
+              <option value="0" selected>Nein</option>
+              <option value="1">Ja</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-xs opacity-80">Suche</label>
+            <input id="f-q" class="input" placeholder="ArtikelNr / Titel…">
           </div>
         </div>
       </div>
-      <div class="flex items-center gap-2">
-        <select id="filter-status" class="bg-slate-900/60 border border-slate-600 text-xs rounded-full px-3 py-1.5">
-          <option value="unreviewed">Nur ungeprüfte</option>
-          <option value="all">Alle</option>
-        </select>
-        <button id="btn-reload" class="btn btn-ghost">
-          🔄 Neu laden
-        </button>
+
+      <div class="overflow-x-auto mt-4">
+        <table class="w-full text-sm">
+          <thead class="text-left opacity-90">
+            <tr>
+              <th class="py-2 pr-3">Bild</th>
+              <th class="py-2 pr-3">ArtikelNr</th>
+              <th class="py-2 pr-3">Kategorie</th>
+              <th class="py-2 pr-3">Bezeichnung</th>
+              <th class="py-2 pr-3">Listenpreis</th>
+              <th class="py-2 pr-3">Rufpreis</th>
+              <th class="py-2 pr-3">Status</th>
+              <th class="py-2 pr-3">Fehler</th>
+            </tr>
+          </thead>
+          <tbody id="rows" class="align-top"></tbody>
+        </table>
       </div>
-    </header>
-
-    <main class="glass rounded-3xl p-3 md:p-4 shadow-2xl">
-      <div id="list" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3"></div>
-    </main>
+    </section>
   </div>
+</div>
 
-  <script>
-    const listEl = document.getElementById('list');
-    const filterStatus = document.getElementById('filter-status');
-    const btnReload = document.getElementById('btn-reload');
-    const toast = document.getElementById('toast');
+<script>
+  const locked = document.getElementById('locked');
+  const content = document.getElementById('content');
+  const tokenInp = document.getElementById('token');
+  const btnUnlock = document.getElementById('btn-unlock');
 
-    function showToast(msg) {
-      toast.textContent = msg;
-      toast.style.display = 'block';
-      setTimeout(() => { toast.style.display = 'none'; }, 1800);
+  const bBudget = document.getElementById('b-budget');
+  const bSpent = document.getElementById('b-spent');
+  const bRemaining = document.getElementById('b-remaining');
+  const bSuccess = document.getElementById('b-success');
+  const bFail = document.getElementById('b-fail');
+  const bLastErr = document.getElementById('b-lasterr');
+
+  const rowsEl = document.getElementById('rows');
+  const fCat = document.getElementById('f-cat');
+  const fFailed = document.getElementById('f-failed');
+  const fQ = document.getElementById('f-q');
+  const btnRefresh = document.getElementById('btn-refresh');
+
+function getToken(){
+  // Safari/Privatmodus kann localStorage zicken -> zusätzlich Token per URL erlauben
+  try{
+    const qs = new URLSearchParams(location.search);
+    const t = qs.get("t");
+    if(t && t.length > 10){
+      localStorage.setItem("MYAUKTION_ADMIN_TOKEN", t);
+      return t;
     }
+    return localStorage.getItem("MYAUKTION_ADMIN_TOKEN") || "";
+  }catch(e){
+    // Fallback: nur URL
+    const qs = new URLSearchParams(location.search);
+    return qs.get("t") || "";
+  }
+}
+function setToken(t){
+  try{ localStorage.setItem("MYAUKTION_ADMIN_TOKEN", t); }catch(e){}
+}
 
-    async function loadArticles() {
-      const status = filterStatus.value;
-      listEl.innerHTML = '<div class="text-xs text-slate-200/80 p-2">Lade Artikel...</div>';
-      try {
-        const res = await fetch('/api/admin/articles?status=' + encodeURIComponent(status));
-        const j = await res.json();
-        if (!res.ok || !j.ok) {
-          listEl.innerHTML = '<div class="text-xs text-red-200 p-2">Fehler beim Laden.</div>';
-          return;
-        }
-        renderList(j.items || []);
-      } catch (e) {
-        console.error(e);
-        listEl.innerHTML = '<div class="text-xs text-red-200 p-2">Server nicht erreichbar.</div>';
-      }
+  async function api(path){
+    const t = getToken();
+    const res = await fetch(path, { headers: t ? {"X-Admin-Token": t} : {} });
+    if(res.status === 401) throw new Error("unauthorized");
+    return res.json();
+  }
+
+  function money(v){ return (Math.round(v*100)/100).toFixed(2).replace(".", ",") + " €"; }
+  function badge(text, cls){ return `<span class="badge ${cls}">${text}</span>`; }
+
+  function renderRows(items){
+    const q = (fQ.value || "").trim().toLowerCase();
+    const filtered = items.filter(it=>{
+      if(!q) return true;
+      return (String(it.artikelnr).toLowerCase().includes(q) || String(it.titel).toLowerCase().includes(q));
+    });
+
+    rowsEl.innerHTML = filtered.map(it=>{
+      const img = it.image ? `<img src="${it.image}" style="height:54px;border-radius:12px;border:1px solid rgba(255,255,255,.25)">` : '';
+      const st = [];
+      if(it.reviewed) st.push(badge("reviewed","bad-green"));
+      if(it.ki_source === "failed") st.push(badge("KI failed","bad-red"));
+      if(it.ki_source === "realtime") st.push(badge("KI ok","bad-green"));
+      if(!it.ki_source || it.ki_source === "pending") st.push(badge(it.ki_source === "pending" ? "pending" : "manuell","bad-yellow"));
+
+      return `
+        <tr class="border-t border-white/15">
+          <td class="py-2 pr-3">${img}</td>
+          <td class="py-2 pr-3 font-bold">${it.artikelnr}</td>
+          <td class="py-2 pr-3">${it.kategorie || ""}</td>
+          <td class="py-2 pr-3">${(it.titel||"").replaceAll("<","&lt;")}</td>
+          <td class="py-2 pr-3">${money(Number(it.retail_price||0))}</td>
+          <td class="py-2 pr-3">${money(Number(it.rufpreis||0))}</td>
+          <td class="py-2 pr-3">${st.join(" ")}</td>
+          <td class="py-2 pr-3 text-xs opacity-90">${(it.ki_last_error||"")}</td>
+        </tr>
+      `;
+    }).join("");
+  }
+
+  async function refresh(){
+    const cat = (fCat.value || "").trim();
+    const only_failed = fFailed.value || "0";
+    const qs = new URLSearchParams();
+    if(cat) qs.set("category", cat);
+    if(only_failed === "1") qs.set("only_failed", "1");
+
+    const budget = await api("/api/admin/budget");
+    bBudget.textContent = money(budget.budget_eur);
+    bSpent.textContent = money(budget.spent_est_eur);
+    bRemaining.textContent = money(budget.remaining_est_eur);
+    bSuccess.textContent = String(budget.success_calls);
+    bFail.textContent = String(budget.failed_calls);
+    bLastErr.textContent = budget.last_error || "—";
+
+    const arts = await api("/api/admin/articles?" + qs.toString());
+    renderRows(arts.items || []);
+  }
+
+  async function init(){
+    const t = getToken();
+    if(!t){
+      locked.classList.remove("hidden");
+      content.classList.add("hidden");
+      return;
     }
-
-    function renderList(items) {
-      if (!items.length) {
-        listEl.innerHTML = '<div class="text-xs text-slate-200/80 p-2">Keine Artikel gefunden.</div>';
-        return;
-      }
-      listEl.innerHTML = '';
-      items.forEach(item => {
-        const card = document.createElement('div');
-        card.className = 'glass rounded-2xl border border-slate-700/70 p-2.5 flex flex-col gap-2.5';
-
-        const header = document.createElement('div');
-        header.className = 'flex items-center justify-between gap-2 text-xs';
-
-        const sourceLabel = item.ki_source === 'batch'
-          ? '<span class="badge badge-green">⚡ KI-Batch</span>'
-          : '';
-
-        header.innerHTML = `
-          <div class="flex items-center gap-1">
-            <div>Artikel <span class="font-semibold text-white">${item.artikelnr}</span></div>
-            ${sourceLabel}
-          </div>
-          <div class="badge ${item.reviewed ? 'badge-green' : 'badge-red'}">
-            ${item.reviewed ? '✅ geprüft' : '⚠️ ungeprüft'}
-          </div>
-        `;
-        card.appendChild(header);
-
-        const thumbWrap = document.createElement('div');
-        thumbWrap.className = 'w-full rounded-xl overflow-hidden border border-slate-700/70 bg-slate-900/80 flex items-center justify-center aspect-[4/3]';
-        if (item.image) {
-          const img = document.createElement('img');
-          img.src = item.image;
-          img.className = 'max-w-full max-h-full';
-          thumbWrap.appendChild(img);
-        } else {
-          const span = document.createElement('span');
-          span.className = 'text-[11px] text-slate-400';
-          span.textContent = 'Kein Bild vorhanden';
-          thumbWrap.appendChild(span);
-        }
-        card.appendChild(thumbWrap);
-
-        const titleField = document.createElement('div');
-        titleField.className = 'flex flex-col gap-1 mt-1';
-        titleField.innerHTML = `
-          <label class="text-[11px] text-slate-300">Bezeichnung</label>
-          <input type="text"
-                 class="w-full rounded-lg bg-slate-950/60 border border-slate-600/80 px-2 py-1 text-xs text-slate-50"
-                 value="${(item.titel || '').replace(/"/g,'&quot;')}">
-        `;
-        card.appendChild(titleField);
-
-        const descField = document.createElement('div');
-        descField.className = 'flex flex-col gap-1';
-        descField.innerHTML = `
-          <label class="text-[11px] text-slate-300">Beschreibung</label>
-          <textarea rows="3"
-                 class="w-full rounded-lg bg-slate-950/60 border border-slate-600/80 px-2 py-1 text-[11px] text-slate-50 resize-vertical">${item.beschreibung || ''}</textarea>
-        `;
-        card.appendChild(descField);
-
-        const actions = document.createElement('div');
-        actions.className = 'flex items-center justify-between gap-2 mt-2';
-        const info = document.createElement('div');
-        info.className = 'text-[11px] text-slate-400';
-        info.textContent = 'Prüfen, anpassen, dann speichern.';
-        const btnSave = document.createElement('button');
-        btnSave.className = 'btn btn-primary';
-        btnSave.textContent = '💾 Speichern & prüfen';
-        btnSave.addEventListener('click', async () => {
-          const newTitle = titleField.querySelector('input').value.trim();
-          const newDesc  = descField.querySelector('textarea').value.trim();
-          try {
-            const res = await fetch('/api/admin/articles/update', {
-              method: 'POST',
-              headers: {'Content-Type':'application/json'},
-              body: JSON.stringify({
-                artikelnr: item.artikelnr,
-                titel: newTitle,
-                beschreibung: newDesc,
-                reviewed: true
-              })
-            });
-            const j = await res.json();
-            if (!res.ok || !j.ok) throw new Error(j.error || res.status);
-            showToast('Artikel ' + item.artikelnr + ' gespeichert.');
-            loadArticles();
-          } catch (e) {
-            console.error(e);
-            showToast('Fehler beim Speichern.');
-          }
-        });
-        actions.appendChild(info);
-        actions.appendChild(btnSave);
-        card.appendChild(actions);
-
-        listEl.appendChild(card);
-      });
+    try{
+      locked.classList.add("hidden");
+      content.classList.remove("hidden");
+      await refresh();
+    }catch(e){
+      locked.classList.remove("hidden");
+      content.classList.add("hidden");
     }
+  }
 
-    filterStatus.addEventListener('change', loadArticles);
-    btnReload.addEventListener('click', loadArticles);
+  btnUnlock.onclick = async ()=>{
+    const t = (tokenInp.value || "").trim();
+    if(!t) return;
+    setToken(t);
+    await init();
+  };
 
-    document.addEventListener('DOMContentLoaded', loadArticles);
-  </script>
+  btnRefresh.onclick = refresh;
+  fCat.onchange = refresh;
+  fFailed.onchange = refresh;
+  fQ.oninput = ()=> init();
+
+  init();
+</script>
 </body>
 </html>
