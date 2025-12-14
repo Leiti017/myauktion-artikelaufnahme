@@ -1,579 +1,514 @@
 <!doctype html>
 <html lang="de">
 <head>
-<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta http-equiv="Pragma" content="no-cache">
-<meta http-equiv="Expires" content="0">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>MyAuktion Artikelaufnahme App</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>MyAuktion · Artikelaufnahme (App)</title>
+
   <link rel="icon" type="image/x-icon" href="/static/my_icon.ico">
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
+  <link rel="manifest" href="/static/site.webmanifest">
+  <meta name="theme-color" content="#1d4ed8">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="MyAuktion">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+
   <script defer src="https://unpkg.com/lucide@latest"></script>
   <script src="https://cdn.tailwindcss.com"></script>
+
   <style>
     :root { color-scheme: light dark; }
-    body {
-      min-height: 100vh;
+    body{
+      min-height:100vh;
       background:
         radial-gradient(1200px 600px at 80% -10%, #e7f1ff 0%, transparent 60%),
-        linear-gradient(135deg, #0ea5e9 0%, #1d4ed8 60%, #1e293b 100%);
-    }
-    .glass {
-      background: rgba(255,255,255,0.08);
-      backdrop-filter: blur(10px);
-      border: 1px solid rgba(255,255,255,0.15);
-    }
-    .btn {
-      padding:.55rem 1.1rem;
-      border-radius:999px;
-      font-weight:600;
-      transition:.15s;
-      display:inline-flex;
-      align-items:center;
-      gap:.45rem;
-      white-space:nowrap;
-    }
-    .btn:hover { opacity:.95; transform: translateY(-1px); }
-    .btn-primary {
-      background:#fff;
-      color:#0f172a;
-      box-shadow:0 8px 30px rgba(0,0,0,.15);
-    }
-    .btn-ghost {
+        linear-gradient(135deg,#0ea5e9,#1d4ed8 60%,#1e293b);
       color:#fff;
-      border:1px solid rgba(255,255,255,.35);
-      background:transparent;
     }
-    .input, select {
-      width:100%;
-      border-radius:.75rem;
-      padding:.55rem .9rem;
-      background:rgba(255,255,255,.96);
-      color:#0f172a;
-      outline:none;
-      border:1px solid transparent;
-      font-size:.9rem;
+    .glass{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.16);backdrop-filter:blur(12px)}
+    .btn{padding:.55rem 1rem;border-radius:999px;font-weight:700;display:inline-flex;align-items:center;gap:.45rem}
+    .btn-primary{background:#fff;color:#0f172a;box-shadow:0 8px 18px rgba(0,0,0,.2)}
+    .btn-ghost{color:#fff;border:1px solid rgba(255,255,255,.35);background:transparent}
+    .input, select{
+      width:100%;padding:.55rem .9rem;border-radius:.75rem;background:rgba(255,255,255,.96);
+      color:#0f172a;outline:none;border:1px solid transparent;font-size:.9rem
     }
-    .input:focus, select:focus, textarea:focus {
-      box-shadow:0 0 0 3px rgba(59,130,246,.35);
-      border-color:rgba(255,255,255,.85);
+    textarea{
+      width:100%;min-height:140px;padding:.6rem .9rem;border-radius:.75rem;
+      background:rgba(255,255,255,.96)!important;color:#0f172a!important; /* schwarz auf weiß */
+      outline:none;border:1px solid transparent;font-size:.9rem;resize:vertical
     }
-    textarea {
-      width:100%;
-      min-height:140px;
-      border-radius:.75rem;
-      padding:.6rem .9rem;
-      background:rgba(255,255,255,.96);
-      color:#0f172a;
-      outline:none;
-      border:1px solid transparent;
-      font-size:.9rem;
-      resize:vertical;
+    .thumb{
+      border-radius:1rem;border:1px dashed rgba(255,255,255,.4);
+      min-height:190px;display:flex;align-items:center;justify-content:center;
+      overflow:hidden;background:rgba(15,23,42,.35);cursor:pointer
     }
-    .thumb {
-      border-radius:1rem;
-      border:1px dashed rgba(255,255,255,.4);
-      min-height:180px;
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      overflow:hidden;
-      background:rgba(15,23,42,.35);
-      cursor:pointer;
-    }
-    .thumb img {
-      max-width:100%;
-      max-height:100%;
-      display:block;
-    }
-    .img-strip img {
-      height:58px;
-      border-radius:.75rem;
-      border:1px solid rgba(255,255,255,.3);
-      cursor:pointer;
-    }
-    .status-pill {
-      font-size:.75rem;
-      padding:.2rem .6rem;
-      border-radius:999px;
-      border:1px solid rgba(255,255,255,.3);
-      display:inline-flex;
-      align-items:center;
-      gap:.3rem;
-    }
-    .status-pill-dot {
-      width:7px;
-      height:7px;
-      border-radius:999px;
-      background:#22c55e;
-    }
-    .toast-wrap {
-      position:fixed;
-      top:12px;
-      right:12px;
-      z-index:50;
-      display:flex;
-      flex-direction:column;
-      gap:8px;
-    }
-    .toast {
-      color:#0f172a;
-      background:#fff;
-      border-radius:999px;
-      padding:7px 12px;
-      font-weight:600;
-      box-shadow:0 10px 30px rgba(0,0,0,.18);
-      opacity:0;
-      transform:translateY(-6px) scale(.94);
-      transition:.18s ease;
-      font-size:.8rem;
-    }
-    .toast.show {
-      opacity:1;
-      transform:translateY(0) scale(1);
-    }
+    .thumb img{max-width:100%;max-height:100%;display:block}
+    .img-strip img{height:58px;border-radius:.75rem;border:1px solid rgba(255,255,255,.3);cursor:pointer}
+    .pill{font-size:.75rem;padding:.2rem .6rem;border-radius:999px;border:1px solid rgba(255,255,255,.3);display:inline-flex;gap:.3rem;align-items:center}
+    .dot{width:7px;height:7px;border-radius:999px;background:#22c55e}
+    .toast-wrap{position:fixed;top:12px;right:12px;z-index:50;display:flex;flex-direction:column;gap:8px}
+    .toast{background:#fff;color:#0f172a;border-radius:999px;padding:7px 12px;font-weight:700;box-shadow:0 10px 30px rgba(0,0,0,.18);opacity:0;transform:translateY(-6px) scale(.94);transition:.18s}
+    .toast.show{opacity:1;transform:translateY(0) scale(1)}
   </style>
 </head>
+
 <body class="text-white">
-  <div id="toast-wrap" class="toast-wrap"></div>
+<div id="toast-wrap" class="toast-wrap"></div>
 
-  <div class="max-w-5xl mx-auto px-4 py-5 md:py-8">
-    <!-- HEADER -->
-    <header class="flex items-center justify-between gap-4 mb-6">
-      <div class="flex items-center gap-3">
-        <div class="w-11 h-11 rounded-full bg-white shadow-lg flex items-center justify-center overflow-hidden">
-          <img src="/static/myauktion_logo.png" alt="MyAuktion" class="max-w-[34px] max-h-[34px]">
-        </div>
-        <div>
-          <div class="text-xl md:text-2xl font-bold tracking-tight flex items-center gap-1">
-            MyAuktion
-            <span class="text-sm font-semibold opacity-90">· Artikelaufnahme</span>
-          </div>
-          <div class="text-xs md:text-sm text-white/80">
-            BEI UNS BESTIMMST DU DEN PREIS!
-          </div>
-        </div>
+<div class="max-w-5xl mx-auto px-4 py-5 md:py-8">
+  <header class="flex items-center justify-between gap-4 mb-6">
+    <div class="flex items-center gap-3">
+      <div class="w-11 h-11 rounded-full bg-white shadow-lg flex items-center justify-center overflow-hidden">
+        <img src="/static/myauktion_logo.png" alt="MyAuktion" class="max-w-[34px] max-h-[34px]">
       </div>
-      <div class="hidden sm:flex items-center gap-3">
-        <div class="px-3 py-1 rounded-full text-xs glass flex items-center gap-2">
-          <span class="w-2 h-2 rounded-full bg-red-500"></span>
-          <span>500+ Artikel pro Tag</span>
+      <div>
+        <div class="text-xl md:text-2xl font-bold tracking-tight flex items-center gap-2">
+          MyAuktion <span class="text-sm font-semibold opacity-90">· Artikelaufnahme</span>
         </div>
+        <div class="text-xs md:text-sm text-white/80">BEI UNS BESTIMMST DU DEN PREIS!</div>
       </div>
-    </header>
+    </div>
 
-    <!-- MAIN -->
-    <main class="glass rounded-3xl p-4 md:p-6 shadow-xl">
-      <div class="grid md:grid-cols-2 gap-5">
-        <!-- LINKES PANEL: Stammdaten + Foto -->
-        <section>
-          <div class="flex items-center justify-between mb-3">
-            <div>
-              <h2 class="text-lg font-semibold">1. Artikel erfassen</h2>
-              <p class="text-xs text-white/80">
-                Artikelnummer, Einlieferer, Lagerort & Foto.
-              </p>
-            </div>
-          </div>
+    <!-- ✅ Admin-Link -->
+    <a href="/admin" class="underline text-sm opacity-90">Admin</a>
+  </header>
 
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
-            <div>
-              <label class="block mb-1 text-xs opacity-80">Artikelnummer</label>
-              <input id="f-artikelnr" type="number" inputmode="numeric" class="input" autocomplete="off">
-              <p class="text-[11px] text-white/70 mt-1">
-                Nach dem Speichern wird automatisch +1 eingetragen.
-              </p>
-            </div>
-            <div>
-              <label class="block mb-1 text-xs opacity-80">Lagerort</label>
-              <input id="f-lagerort" type="text" class="input" placeholder="z.B. (22) Haushalt/Freizeit 170">
-              <p class="text-[11px] text-white/70 mt-1">
-                Bleibt für die nächsten Artikel erhalten.
-              </p>
-            </div>
-          </div>
+  <main class="glass rounded-3xl p-4 md:p-6 shadow-xl">
+    <div class="grid md:grid-cols-2 gap-5">
+      <!-- LINKS -->
+      <section>
+        <h2 class="text-lg font-semibold mb-2">1. Artikel erfassen</h2>
 
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
-            <div>
-              <label class="block mb-1 text-xs opacity-80">Einlieferer-ID</label>
-              <select id="f-einlieferer" class="input">
-                <option value="22" selected>22</option>
-                <option value="55">55</option>
-                <option value="66">66</option>
-                <option value="65461">65461</option>
-              </select>
-            </div>
-            <div>
-              <label class="block mb-1 text-xs opacity-80">Mitarbeiter</label>
-              <select id="f-mitarbeiter" class="input">
-                <option value="Jan">Jan</option>
-                <option value="Rene">Rene</option>
-                <option value="Karin">Karin</option>
-                <option value="Katharina">Katharina</option>
-                <option value="Linda">Linda</option>
-                <option value="Jasmin">Jasmin</option>
-              </select>
-            </div>
-          </div>
-
-          <!-- verstecktes File-Input (nur per Klick auf Bild/ Button) -->
-          <input id="f-file" type="file" accept="image/*" capture="environment" class="hidden">
-
-          <!-- Bild-Vorschau: klickbar zum Foto auswählen -->
-          <div class="thumb mb-2" id="thumb">
-            <span class="text-xs text-white/70 text-center">
-              Hier tippen, um ein Foto aufzunehmen / auszuwählen.
-            </span>
-          </div>
-          <div class="img-strip flex gap-2 overflow-x-auto pb-1" id="img-strip"></div>
-
-          <!-- Buttons: Foto auswählen + Speichern -->
-          <div class="flex flex-col gap-2 mt-3">
-            <button id="btn-photo" class="btn btn-primary text-sm">
-              <i data-lucide="camera" class="w-4 h-4"></i>
-              <span>📸 Foto auswählen</span>
-            </button>
-            <button id="btn-save" class="btn btn-ghost text-sm">
-              <i data-lucide="save" class="w-4 h-4"></i>
-              <span>💾 Artikel speichern</span>
-            </button>
-          </div>
-
-          <p class="text-[11px] text-white/70 mt-2">
-            Foto auswählen lädt automatisch hoch. Danach berechnet die KI einen Vorschlag,
-            den du direkt hier siehst. Artikel speichern legt alles ab und setzt die nächste Artikelnummer (+1).
-          </p>
-        </section>
-
-        <!-- RECHTES PANEL: Text + Status -->
-        <section>
-          <div class="flex items-center justify-between mb-3">
-            <div>
-              <h2 class="text-lg font-semibold">2. Titel & Beschreibung</h2>
-              <p class="text-xs text-white/80">
-                KI-Vorschlag kontrollieren oder Text selbst eingeben.
-              </p>
-            </div>
-            <button id="btn-describe" class="btn btn-ghost text-xs">
-              ⚡ KI neu berechnen (optional)
-            </button>
-          </div>
-
-          <div class="mb-3">
-            <label class="block mb-1 text-xs opacity-80">Bezeichnung</label>
-            <input id="f-title" type="text" class="input" autocomplete="off">
-          </div>
-
-          <div class="mb-3">
-            <label class="block mb-1 text-xs opacity-80">Beschreibung</label>
-            <textarea id="f-desc"></textarea>
-          </div>
-
-          <div class="flex items-center justify-between gap-2 mb-3">
-            <div id="status-text" class="text-[11px] text-white/80">
-              Noch nicht gespeichert.
-            </div>
-            <div id="status-pill" class="status-pill hidden">
-              <span class="status-pill-dot"></span>
-              <span>Text aus KI-Batch</span>
-            </div>
-          </div>
-
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
           <div>
-            <label class="block mb-1 text-xs opacity-80">System-Log</label>
-            <div id="log" class="text-[11px] text-slate-900 bg-white/90 rounded-xl p-2 max-h-32 overflow-y-auto"></div>
+            <label class="block mb-1 text-xs opacity-80">Artikelnummer (mind. 6-stellig)</label>
+            <input id="f-artikelnr" type="number" inputmode="numeric" class="input" autocomplete="off" placeholder="z.B. 810233">
+            <div id="artnr-hint" class="text-[11px] text-white/80 mt-1"></div>
+            <div id="artnr-exists" class="hidden mt-2 rounded-xl border border-red-300/60 bg-red-500/20 p-2 text-[12px]">
+              <div class="font-semibold text-red-100">⚠ Artikelnummer existiert bereits</div>
+              <div class="text-red-100/90">Bitte nimm die nächste Nummer – oder wenn du bewusst Foto 2/3 zum selben Artikel machst:</div>
+              <button id="btn-continue-existing" type="button" class="mt-2 bg-white text-slate-900 font-semibold px-3 py-1.5 rounded-lg">Weiter bearbeiten</button>
+            </div>
           </div>
-        </section>
-      </div>
-    </main>
+          <div>
+            <label class="block mb-1 text-xs opacity-80">Lagerort</label>
+            <input id="f-lagerort" type="text" class="input" placeholder="z.B. (22) Haushalt/Freizeit 170">
+          </div>
+        </div>
 
-    <footer class="mt-5 flex flex-col md:flex-row items-center justify-between gap-2 text-xs text-white/80">
-      <div class="flex items-center gap-2">
-        <i data-lucide="gavel" class="w-4 h-4"></i>
-        <span>Programmiert von Jan Leitinger / Leiti017</span>
-      </div>
-      <div class="flex items-center gap-1">
-        <a href="https://www.myauktion.com" target="_blank" rel="noreferrer" class="underline">www.myauktion.com</a>
-        <span>·</span>
-        <a href="https://www.goldgrube.at" target="_blank" rel="noreferrer" class="underline">www.goldgrube.at</a>
-      </div>
-    </footer>
-  </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+          <div>
+            <label class="block mb-1 text-xs opacity-80">Einlieferer-ID</label>
+            <select id="f-einlieferer" class="input">
+              <option value="22" selected>22</option>
+              <option value="55">55</option>
+              <option value="66">66</option>
+              <option value="65461">65461</option>
+            </select>
+          </div>
+          <div>
+            <label class="block mb-1 text-xs opacity-80">Mitarbeiter</label>
+            <select id="f-mitarbeiter" class="input">
+              <option>Jan</option><option>Rene</option><option>Karin</option><option>Katharina</option>
+              <option>Linda</option><option>Jasmin</option><option>Natascha</option>
+            </select>
+          </div>
+        </div>
 
-  <script>
-    const fArt   = document.getElementById('f-artikelnr');
-    const fLager = document.getElementById('f-lagerort');
-    const fEinl  = document.getElementById('f-einlieferer');
-    const fMit   = document.getElementById('f-mitarbeiter');
-    const fFile  = document.getElementById('f-file');
-    const thumb  = document.getElementById('thumb');
-    const imgStrip = document.getElementById('img-strip');
-    const fTitle = document.getElementById('f-title');
-    const fDesc  = document.getElementById('f-desc');
-    const statusText = document.getElementById('status-text');
-    const statusPill = document.getElementById('status-pill');
-    const logEl  = document.getElementById('log');
-    const toastWrap = document.getElementById('toast-wrap');
+        <input id="f-file" type="file" accept="image/*" capture="environment" class="hidden">
 
-    const btnPhoto    = document.getElementById('btn-photo');
-    const btnDescribe = document.getElementById('btn-describe');
-    const btnSave     = document.getElementById('btn-save');
+        <div class="thumb mb-2" id="thumb">
+          <span class="text-xs text-white/70 text-center">Tippen, um Foto aufzunehmen / auszuwählen</span>
+        </div>
 
-    const defaultThumbHtml =
-      '<span class="text-xs text-white/70 text-center">Hier tippen, um ein Foto aufzunehmen / auszuwählen.</span>';
+        <div class="img-strip flex gap-2 overflow-x-auto pb-1" id="img-strip"></div>
 
-    function log(msg) {
-      const time = new Date().toLocaleTimeString();
-      const div = document.createElement('div');
-      div.textContent = '[' + time + '] ' + msg;
-      logEl.prepend(div);
-    }
+        <div class="flex flex-col gap-2 mt-3">
+          <button id="btn-photo" class="btn btn-primary text-sm">
+            <i data-lucide="camera" class="w-4 h-4"></i> Foto auswählen
+          </button>
+          <button id="btn-save" class="btn btn-ghost text-sm">
+            <i data-lucide="save" class="w-4 h-4"></i> Artikel speichern
+          </button>
+        </div>
 
-    function showToast(msg) {
-      const el = document.createElement('div');
-      el.className = 'toast';
-      el.textContent = msg;
-      toastWrap.appendChild(el);
-      void el.offsetWidth;
-      el.classList.add('show');
-      setTimeout(() => {
-        el.classList.remove('show');
-        setTimeout(() => el.remove(), 200);
-      }, 1600);
-    }
+        <div class="mt-3">
+          <div id="status-pill" class="pill hidden"><span class="dot"></span><span id="status-pill-text">KI läuft…</span></div>
+          <div id="status-text" class="text-[11px] text-white/80 mt-2">Bereit.</div>
+        </div>
+      </section>
 
-    function parseIntSafe(v) {
-      const n = parseInt(v, 10);
-      return Number.isFinite(n) ? n : null;
-    }
+      <!-- RECHTS -->
+      <section>
+        <div class="flex items-center justify-between mb-2">
+          <h2 class="text-lg font-semibold">2. KI-Vorschlag</h2>
+          <button id="btn-describe" class="btn btn-ghost text-xs">⚡ KI neu berechnen</button>
+        </div>
 
-    function prepareNextArtNr() {
-      const current = fArt.value.trim();
-      const n = parseIntSafe(current);
-      if (n === null) return;
-      fArt.value = String(n + 1);
-      statusText.textContent = 'Nächste Artikelnummer vorbereitet: ' + (n + 1);
-      statusPill.classList.add('hidden');
-      // Text & Datei/Bild zurücksetzen, Lagerort/EINL/Mitarbeiter bleiben
-      fTitle.value = '';
-      fDesc.value = '';
-      fFile.value = '';
-      thumb.innerHTML = defaultThumbHtml;
-      imgStrip.innerHTML = '';
-      log('Nächster Artikel: ' + (n + 1));
-    }
+        <div class="mb-3">
+          <label class="block mb-1 text-xs opacity-80">Bezeichnung</label>
+          <input id="f-title" type="text" class="input" autocomplete="off">
+        </div>
 
-    async function refreshImages() {
-      const art = fArt.value.trim();
-      if (!art) return;
-      try {
-        const res = await fetch('/api/images?artikelnr=' + encodeURIComponent(art));
-        const j = await res.json();
-        imgStrip.innerHTML = '';
-        if (!j.ok || !j.files || !j.files.length) return;
-        j.files.forEach(url => {
-          const img = document.createElement('img');
-          img.src = url;
-          img.addEventListener('click', () => {
-            thumb.innerHTML = '';
-            const big = document.createElement('img');
-            big.src = url;
-            thumb.appendChild(big);
-          });
-          imgStrip.appendChild(img);
-        });
-      } catch (e) {
-        console.error(e);
-      }
-    }
+        <div class="mb-3">
+          <label class="block mb-1 text-xs opacity-80">Beschreibung</label>
+          <textarea id="f-desc"></textarea>
+        </div>
 
-    async function initNextArtNr() {
-      try {
-        const res = await fetch('/api/next_artikelnr');
-        const j = await res.json();
-        if (res.ok && j.ok && j.next) {
-          fArt.value = String(j.next);
-          statusText.textContent = 'Vorgeschlagene Artikelnummer: ' + j.next;
-          log('Vorgeschlagene Artikelnummer: ' + j.next);
-        }
-      } catch (e) {
-        console.error(e);
-      }
-    }
+        <!-- ✅ PREISE -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+          <div>
+            <label class="block mb-1 text-xs opacity-80">Listenpreis (€)</label>
+            <input id="f-retail" type="number" class="input" readonly>
+          </div>
+          <div>
+            <label class="block mb-1 text-xs opacity-80">Rufpreis (20%, aufgerundet)</label>
+            <input id="f-ruf" type="number" class="input" readonly>
+          </div>
+        </div>
 
-    // Artikelnummer blur -> prüfen ob es schon Bilder + Meta gibt
-    fArt.addEventListener('blur', async () => {
-      const art = fArt.value.trim();
-      if (!art) return;
+        <label class="block mb-1 text-xs opacity-80">System-Log</label>
+        <div id="log" class="text-[11px] text-slate-900 bg-white/90 rounded-xl p-2 max-h-40 overflow-y-auto"></div>
+      </section>
+    </div>
+  </main>
+</div>
 
-      try {
-        // 1) check_artnr -> gibt Auskunft ob schon Bilder existieren
-        const resCheck = await fetch('/api/check_artnr?artikelnr=' + encodeURIComponent(art));
-        const jCheck = await resCheck.json();
+<script>
+  const fArt = document.getElementById('f-artikelnr');
+  const artExistsBox = document.getElementById('artnr-exists');
+  const btnContinueExisting = document.getElementById('btn-continue-existing');
+  let allowExistingArtNr = null;
 
-        if (resCheck.ok && jCheck.ok && jCheck.exists) {
-          statusText.textContent = 'Artikelnummer existiert bereits – Bilder & Daten werden ergänzt.';
-          await refreshImages();
-        } else {
-          statusText.textContent = 'Neue Artikelnummer.';
-          imgStrip.innerHTML = '';
-          thumb.innerHTML = defaultThumbHtml;
-        }
+  const artHint = document.getElementById('artnr-hint');
+  const fLager = document.getElementById('f-lagerort');
+  const fEinl = document.getElementById('f-einlieferer');
+  const fMit = document.getElementById('f-mitarbeiter');
 
-        // 2) meta -> vorhandene KI-/Manuell-Texte holen
-        const resMeta = await fetch('/api/meta?artikelnr=' + encodeURIComponent(art));
-        const jMeta = await resMeta.json();
+  const fFile = document.getElementById('f-file');
+  const thumb = document.getElementById('thumb');
+  const imgStrip = document.getElementById('img-strip');
 
-        if (resMeta.ok && jMeta.ok) {
-          if (jMeta.titel) fTitle.value = jMeta.titel;
-          if (jMeta.beschreibung) fDesc.value = jMeta.beschreibung;
+  const fTitle = document.getElementById('f-title');
+  const fDesc = document.getElementById('f-desc');
+  const fRetail = document.getElementById('f-retail');
+  const fRuf = document.getElementById('f-ruf');
 
-          // Status-Pill abhängig von ki_source / reviewed
-          if (jMeta.ki_source === 'batch') {
-            statusPill.classList.remove('hidden');
-            statusPill.querySelector('span:nth-child(2)').textContent = 'Text aus KI-Batch';
-          } else if (jMeta.reviewed) {
-            statusPill.classList.remove('hidden');
-            statusPill.querySelector('span:nth-child(2)').textContent = 'Im Büro geprüft';
-          } else {
-            statusPill.classList.add('hidden');
-          }
-        }
-      } catch (e) {
-        console.error(e);
-      }
-    });
+  const btnPhoto = document.getElementById('btn-photo');
+  const btnSave = document.getElementById('btn-save');
+  const btnDescribe = document.getElementById('btn-describe');
 
-    // Foto wählen – sowohl Klick auf Vorschaubox als auch auf Button
-    function triggerPhotoSelect() {
-      fFile.click();
-    }
-    thumb.addEventListener('click', triggerPhotoSelect);
-    btnPhoto.addEventListener('click', triggerPhotoSelect);
+  const statusText = document.getElementById('status-text');
+  const statusPill = document.getElementById('status-pill');
+  const statusPillText = document.getElementById('status-pill-text');
 
-    // Wenn Datei ausgewählt wurde -> automatisch hochladen + Vorschau anzeigen + KI holen
-    fFile.addEventListener('change', async () => {
-      const art = fArt.value.trim();
-      if (!art) {
-        alert('Bitte zuerst eine Artikelnummer eingeben.');
-        fFile.value = '';
+  const logEl = document.getElementById('log');
+  const toastWrap = document.getElementById('toast-wrap');
+
+  function log(msg){
+    const t = new Date().toLocaleTimeString();
+    const d = document.createElement('div');
+    d.textContent = `[${t}] ${msg}`;
+    logEl.prepend(d);
+  }
+  function toast(msg){
+    const el = document.createElement('div');
+    el.className = 'toast';
+    el.textContent = msg;
+    toastWrap.appendChild(el);
+    void el.offsetWidth;
+    el.classList.add('show');
+    setTimeout(()=>{ el.classList.remove('show'); setTimeout(()=>el.remove(),200); }, 1500);
+  }
+  function validArtNr(){
+    const v = (fArt.value||"").trim();
+    return /^\d{6,}$/.test(v);
+  }
+  function setPill(on, text){
+    if(on){ statusPill.classList.remove('hidden'); statusPillText.textContent = text || "…"; }
+    else { statusPill.classList.add('hidden'); }
+  }
+
+  async function deleteImage(filename){
+    const art = (fArt.value||"").trim();
+    if(!art || !filename) return;
+    try{
+      log("🗑 Lösche Foto: " + filename);
+      const res = await fetch(`/api/image?artikelnr=${encodeURIComponent(art)}&filename=${encodeURIComponent(filename)}`, { method:'DELETE' });
+      const j = await res.json();
+      if(!res.ok || !j.ok){
+        log("❌ Löschen fehlgeschlagen: " + (j.error || res.status));
+        toast("Löschen fehlgeschlagen");
         return;
       }
-      if (!fFile.files.length) return;
+      toast("Foto gelöscht");
+      await refreshImages();
+      await refreshMeta(); // zeigt ggf. neues last_image
+      if(j.remaining && j.remaining.length){
+        await pollUntilDone(art, 18000);
+      }
+    }catch(e){
+      log("❌ Löschen Fehler: " + e);
+    }
+  }
 
-      const file = fFile.files[0];
-      const fd = new FormData();
-      fd.append('file', file);
-      fd.append('artikelnr', art);
+  async function refreshImages(){
+    const art = (fArt.value||"").trim();
+    if(!art) return;
+    const res = await fetch('/api/images?artikelnr=' + encodeURIComponent(art));
+    const j = await res.json();
+    imgStrip.innerHTML = '';
+    (j.files||[]).forEach(url=>{
+      const fn = (url.split('/').pop()||'').split('?')[0];
+      const wrap = document.createElement('div');
+      wrap.className = 'inline-flex flex-col items-center gap-1 mr-2';
 
-      log('Upload für Artikel ' + art + ' gestartet …');
+      const img = document.createElement('img');
+      img.src = url;
+      img.onclick = ()=> thumb.innerHTML = `<img src="${url}">`;
 
-      try {
-        const res = await fetch('/api/upload', { method: 'POST', body: fd });
-        const j = await res.json();
-        if (!res.ok || !j.ok) {
-          alert('Fehler beim Upload: ' + (j.error || res.status));
-          log('Upload-Fehler.');
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'text-[11px] px-2 py-1 rounded bg-red-500/30 border border-red-300/40 hover:bg-red-500/40';
+      btn.textContent = (j.files||[]).length > 1 ? 'Foto löschen' : 'Foto löschen';
+      btn.onclick = ()=> deleteImage(fn);
+
+      wrap.appendChild(img);
+      wrap.appendChild(btn);
+      imgStrip.appendChild(wrap);
+    });
+  }
+
+
+  async function refreshMeta(){
+    const art = (fArt.value||"").trim();
+    if(!art) return;
+    const res = await fetch('/api/meta?artikelnr=' + encodeURIComponent(art));
+    const j = await res.json();
+    if(!j.ok) return;
+
+    fTitle.value = j.titel || "";
+    fDesc.value  = j.beschreibung || "";
+    fRetail.value = (j.retail_price ?? "");
+    fRuf.value    = (j.rufpreis ?? "");
+
+    if(j.image){
+      thumb.innerHTML = `<img src="${j.image}">`;
+    }
+  }
+
+  async function pollUntilDone(art, maxMs=18000){
+    const start = Date.now();
+    setPill(true, "KI berechnet …");
+    statusText.textContent = "KI berechnet …";
+
+    while(Date.now() - start < maxMs){
+      const res = await fetch('/api/meta?artikelnr=' + encodeURIComponent(art));
+      const j = await res.json();
+      if(j.ok){
+        if(j.ki_source === 'realtime'){
+          fTitle.value = j.titel || "";
+          fDesc.value  = j.beschreibung || "";
+          fRetail.value = (j.retail_price ?? "");
+          fRuf.value    = (j.rufpreis ?? "");
+          setPill(false);
+          statusText.textContent = "KI-Vorschlag übernommen.";
+          toast("KI fertig");
           return;
         }
+        if(j.ki_source === 'failed'){
+          setPill(false);
+          statusText.textContent = "KI fehlgeschlagen – bitte manuell ergänzen.";
+          return;
+        }
+      }
+      await new Promise(r=>setTimeout(r, 700));
+    }
+    setPill(false);
+    statusText.textContent = "KI dauert länger – du kannst trotzdem weitermachen.";
+  }
 
-        // Thumbnail lokal anzeigen
-        const reader = new FileReader();
-        reader.onload = ev => {
-          thumb.innerHTML = '';
-          const img = document.createElement('img');
-          img.src = ev.target.result;
-          thumb.appendChild(img);
-        };
-        reader.readAsDataURL(file);
+  async function checkArtNrExists(){
+    const v = (fArt.value||"").trim();
+    if(!v){ artExistsBox.classList.add('hidden'); return; }
+    try{
+      const res = await fetch('/api/check_artnr?artikelnr=' + encodeURIComponent(v));
+      const j = await res.json();
+      const exists = !!(j && j.ok && j.exists);
+      if(exists && allowExistingArtNr !== v) artExistsBox.classList.remove('hidden');
+      else artExistsBox.classList.add('hidden');
+    }catch(e){}
+  }
 
-        await refreshImages();
+  btnContinueExisting.onclick = ()=>{
+    const v = (fArt.value||"").trim();
+    if(!v) return;
+    allowExistingArtNr = v;
+    artExistsBox.classList.add('hidden');
+    toast('Weiter bearbeiten aktiv');
+  };
 
-        statusText.textContent = 'Bild hochgeladen – KI-Vorschlag wird berechnet …';
-        statusPill.classList.add('hidden');
-        log('Bild für Artikel ' + art + ' hochgeladen.');
-        showToast('Bild hochgeladen');
+  function updateArtnrHint(){
+    if(!fArt.value){ artHint.textContent=""; return; }
+    if(validArtNr()){
+      artHint.textContent = "✓ OK";
+      artHint.className = "text-[11px] text-green-200 mt-1";
+    }else{
+      artHint.textContent = "⚠ Artikelnummer muss mindestens 6-stellig sein.";
+      artHint.className = "text-[11px] text-red-200 mt-1";
+    }
+  }
 
-    // MANUELLE KI-BESCHREIBUNG (optional, falls man später nochmal will)
-    btnDescribe.addEventListener('click', async () => {
-      const art = fArt.value.trim();
-      if (!art) {
-        alert('Bitte zuerst eine Artikelnummer eingeben.');
+  btnPhoto.onclick = ()=> fFile.click();
+  thumb.onclick = ()=> fFile.click();
+
+  fArt.addEventListener('input', ()=>{ updateArtnrHint(); checkArtNrExists(); });
+  fArt.addEventListener('blur', async ()=>{
+    updateArtnrHint();
+    await checkArtNrExists();
+    if(!validArtNr()) return;
+    await refreshImages();
+    await refreshMeta();
+  });
+
+  async function compressImageFile(file){
+    // Schnell: 750px MaxKante, Qualität 0.7
+    const maxDim = 750;
+    const quality = 0.7;
+    const img = document.createElement('img');
+    const dataUrl = await new Promise((resolve, reject)=>{
+      const r = new FileReader();
+      r.onload = ()=>resolve(r.result);
+      r.onerror = reject;
+      r.readAsDataURL(file);
+    });
+    img.src = dataUrl;
+    await img.decode();
+    let w = img.naturalWidth, h = img.naturalHeight;
+    const scale = Math.min(1, maxDim / Math.max(w,h));
+    w = Math.round(w*scale); h = Math.round(h*scale);
+    const c = document.createElement('canvas'); c.width=w; c.height=h;
+    const ctx = c.getContext('2d');
+    ctx.drawImage(img,0,0,w,h);
+    const blob = await new Promise(res=> c.toBlob(res, 'image/jpeg', quality));
+    return new File([blob], 'photo.jpg', {type:'image/jpeg'});
+  }
+
+  fFile.addEventListener('change', async ()=>{
+    if(!validArtNr()){
+      alert("Artikelnummer muss mindestens 6-stellig sein.");
+      fFile.value = "";
+      return;
+    }
+    const art = (fArt.value||"").trim();
+    let file = fFile.files[0];
+    if(!file) return;
+    try{ file = await compressImageFile(file); }catch(e){}
+
+    // lokale Vorschau sofort
+    const reader = new FileReader();
+    reader.onload = (ev)=> thumb.innerHTML = `<img src="${ev.target.result}">`;
+    reader.readAsDataURL(file);
+
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('artikelnr', art);
+    fd.append('allow_existing', (allowExistingArtNr === art) ? '1' : '0');
+
+    log("Upload startet …");
+    setPill(true, "Upload …");
+
+    const res = await fetch('/api/upload', { method:'POST', body: fd });
+    const j = await res.json();
+    if(!res.ok || !j.ok){
+      setPill(false);
+      if(res.status === 409 && j && j.code === 'ARTNR_EXISTS'){
+        artExistsBox.classList.remove('hidden');
+        toast('Artikelnummer existiert');
+        log('⚠ ' + j.error);
         return;
       }
-      statusText.textContent = 'Manuelle KI-Berechnung läuft …';
-      log('Manuelle KI-Berechnung für Artikel ' + art + ' …');
+      alert("Upload Fehler: " + (j.error || res.status));
+      return;
+    }
 
-      try {
-        const res = await fetch('/api/describe?artikelnr=' + encodeURIComponent(art));
-        const j = await res.json();
-        if (!res.ok || !j.ok) {
-          alert('Fehler bei KI-Berechnung: ' + (j.error || res.status));
-          statusText.textContent = 'Fehler bei manueller KI-Berechnung.';
-          log('KI-Fehler.');
-          return;
-        }
-        fTitle.value = j.title || '';
-        fDesc.value  = j.description || '';
-        statusText.textContent = 'Manueller KI-Vorschlag eingetragen.';
-        statusPill.classList.add('hidden');
-        log('KI-Vorschlag für Artikel ' + art + ' übernommen.');
-        showToast('KI-Vorschlag übernommen');
-      } catch (e) {
-        console.error(e);
-        alert('Serverfehler bei KI-Berechnung.');
-        statusText.textContent = 'Serverfehler bei manueller KI-Berechnung.';
-        log('Serverfehler bei KI.');
-      }
-    });
+    allowExistingArtNr = art;
+    log("Upload OK: " + j.filename);
+    toast("Foto hochgeladen");
+    await refreshImages();
+    await pollUntilDone(art, 18000);
+  });
 
-    // SPEICHERN -> und danach automatisch +1 Artikelnummer
-    btnSave.addEventListener('click', async () => {
-      const art = fArt.value.trim();
-      if (!art) {
-        alert('Bitte Artikelnummer eingeben.');
+  btnDescribe.onclick = async ()=>{
+    if(!validArtNr()) return alert("Artikelnummer muss mindestens 6-stellig sein.");
+    const art = (fArt.value||"").trim();
+    setPill(true, "Manuelle KI …");
+    const res = await fetch('/api/describe?artikelnr=' + encodeURIComponent(art));
+    const j = await res.json();
+    if(!res.ok || !j.ok){
+      setPill(false);
+      if(j && j.meta){
+        log('⚠ KI gerade nicht verfügbar – zeige letzte Daten.');
+        await refreshMeta();
         return;
       }
-      const payload = {
-        artikelnr: art,
-        lagerort: fLager.value.trim(),
-        einlieferer: fEinl.value,
-        mitarbeiter: fMit.value,
-        titel: fTitle.value.trim() || ('Artikel ' + art),
-        beschreibung: fDesc.value.trim(),
-        reviewed: false
-      };
-      log('Speichere Artikel ' + art + ' …');
-      try {
-        const res = await fetch('/api/save', {
-          method: 'POST',
-          headers: {'Content-Type':'application/json'},
-          body: JSON.stringify(payload)
-        });
-        const j = await res.json();
-        if (!res.ok || !j.ok) {
-          alert('Fehler beim Speichern: ' + (j.error || res.status));
-          log('Fehler beim Speichern.');
-          return;
-        }
-        statusText.textContent = 'Artikel gespeichert (noch nicht vom Büro geprüft).';
-        statusPill.classList.add('hidden');
-        log('Artikel ' + art + ' gespeichert.');
-        showToast('Artikel ' + art + ' gespeichert');
-        prepareNextArtNr();   // direkt nächste Nummer setzen
-      } catch (e) {
-        console.error(e);
-        alert('Serverfehler beim Speichern.');
-        statusText.textContent = 'Serverfehler beim Speichern.';
-        log('Serverfehler beim Speichern.');
-      }
-    });
+      alert("KI Fehler: " + (j.error || res.status));
+      return;
+    }
+    fTitle.value = j.title || "";
+    fDesc.value = j.description || "";
+    fRetail.value = (j.retail_price ?? "");
+    fRuf.value = (j.rufpreis ?? "");
+    setPill(false);
+    toast("KI übernommen");
+  };
 
-    // Icons initialisieren + erste Artikelnummer holen
-    window.addEventListener('DOMContentLoaded', () => {
-      if (window.lucide) lucide.createIcons();
-      initNextArtNr();
+  btnSave.onclick = async ()=>{
+    if(!validArtNr()) return alert("Artikelnummer muss mindestens 6-stellig sein.");
+    const art = (fArt.value||"").trim();
+
+    const payload = {
+      artikelnr: art,
+      lagerort: (fLager.value||"").trim(),
+      einlieferer: fEinl.value,
+      mitarbeiter: fMit.value,
+      titel: (fTitle.value||"").trim(),
+      beschreibung: (fDesc.value||"").trim(),
+      reviewed: false
+    };
+
+    const res = await fetch('/api/save', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
     });
-  </script>
+    const j = await res.json();
+    if(!res.ok || !j.ok){
+      alert("Speichern Fehler: " + (j.error || res.status));
+      return;
+    }
+    toast("Gespeichert");
+    log("Gespeichert: " + art);
+    // nächste Nummer
+    try{
+      const n = parseInt(art,10);
+      if(Number.isFinite(n)) fArt.value = String(n+1);
+      updateArtnrHint();
+      fTitle.value=""; fDesc.value=""; fRetail.value=""; fRuf.value="";
+      imgStrip.innerHTML="";
+      thumb.innerHTML='<span class="text-xs text-white/70 text-center">Tippen, um Foto aufzunehmen / auszuwählen</span>';
+      statusText.textContent="Bereit für nächsten Artikel.";
+    }catch(e){}
+  };
+
+  window.addEventListener('DOMContentLoaded', ()=>{
+    if(window.lucide) lucide.createIcons();
+    updateArtnrHint();
+  });
+</script>
 </body>
 </html>
