@@ -313,14 +313,12 @@ def _run_meta_background(artikelnr: str, img_path: Path) -> None:
 # ----------------------------
 @app.get("/")
 def root():
-    return FileResponse(str(BASE_DIR / "index.html"))
-
-
+    html = (BASE_DIR / "app.html").read_text("utf-8")
+    return Response(content=html, media_type="text/html", headers={"Cache-Control":"no-store, no-cache, must-revalidate","Pragma":"no-cache","Expires":"0"})
 @app.get("/admin")
 def admin_root():
-    return FileResponse(str(BASE_DIR / "admin.html"))
-
-
+    html = (BASE_DIR / "admin.html").read_text("utf-8")
+    return Response(content=html, media_type="text/html", headers={"Cache-Control":"no-store, no-cache, must-revalidate","Pragma":"no-cache","Expires":"0"})
 @app.get("/api/health")
 def health():
     return {"ok": True}
@@ -608,3 +606,8 @@ def admin_articles(request: Request, category: str = "", only_failed: int = 0):
 
     items.sort(key=_sort_key)
     return {"ok": True, "items": items}
+
+
+@app.get("/api/version")
+def api_version():
+    return {"ok": True, "build": "20251214-094057"}
