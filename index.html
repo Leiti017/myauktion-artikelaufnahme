@@ -1,14 +1,14 @@
 <!doctype html>
 <html lang="de">
 <head>
-    <!-- build:20251214_112738 -->
+    P251214_114506-->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
 
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>MyAuktion Artikelaufnahme • 20251214_112738</title>
+  <title>MyAuktion Artikelaufnahme • 20251214_114506</title>
 
   <link rel="icon" type="image/x-icon" href="/static/my_icon.ico">
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
@@ -255,12 +255,27 @@ async function refreshImages(){
     const j = await res.json();
     imgStrip.innerHTML = '';
     (j.files||[]).forEach(url=>{
+      const fn = (url.split('/').pop()||'').split('?')[0];
+
+      const wrap = document.createElement('div');
+      wrap.className = 'inline-flex flex-col items-center gap-1 mr-2';
+
       const img = document.createElement('img');
       img.src = url;
+      img.className = 'h-20 w-20 object-cover rounded-lg border border-white/10';
       img.onclick = ()=> thumb.innerHTML = `<img src="${url}">`;
-      imgStrip.appendChild(img);
+
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'text-[11px] px-2 py-1 rounded bg-red-500/30 border border-red-300/40 hover:bg-red-500/40';
+      btn.textContent = 'Foto löschen';
+      btn.onclick = ()=> deleteImage(fn);
+
+      wrap.appendChild(img);
+      wrap.appendChild(btn);
+      imgStrip.appendChild(wrap);
     });
-  }
+}
 
   async function refreshMeta(){
     const art = (fArt.value||"").trim();
