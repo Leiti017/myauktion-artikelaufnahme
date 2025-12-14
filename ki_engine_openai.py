@@ -142,10 +142,6 @@ def _parse_response(text: str) -> Optional[Dict[str, Any]]:
 
 
 def generate_meta(image_path: str, art_id: str, context: Dict[str, Any] | None = None) -> Optional[Dict[str, Any]]:
-    return generate_meta_multi([image_path], art_id, context=context)
-
-def generate_meta_multi(image_paths: list[str], art_id: str, context: Dict[str, Any] | None = None) -> Optional[Dict[str, Any]]:
-    """Multi-Image Fusion: 1..N Fotos in EINER Anfrage. Nutzt context als Alt-Daten."""
     if not OPENAI_API_KEY:
         print("[KI] Fehler: OPENAI_API_KEY fehlt")
         return None
@@ -163,48 +159,53 @@ TEXT_ALT: {ctx_desc}
 CATEGORY_ALT: {ctx_cat}
 
 Aufgabe:
-- Verwende ALLE neuen Fotos, um fehlende Details zu ERGÄNZEN oder zu KORRIGIEREN.
+- Verwende das neue Foto, um fehlende Details zu ERGÄNZEN oder zu KORRIGIEREN.
 - NAME bleibt strikt: Marke Produktbezeichnung Typenbezeichnung.
 - Details (Menge, Maße z.B. 23 cm, MHD, Set, Zubehör) gehören in TEXT – nur wenn sichtbar.
 - Wenn etwas nicht sichtbar ist: NICHT raten.
 """
+
+    b64 = _encode_image_to_b64(image_path)
 
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",
         "Content-Type": "application/json",
     }
 
-    content = [
-        {"type": "text", "text": "Bitte streng im Format antworten (NAME/TEXT/CATEGORY/PRICE_EUR).\n\n" + ctx_text},
-    ]
-
-    # Max 4 Bilder für Speed/Kosten, detail=low
-    for p in (image_paths or [])[:4]:
-        b64 = _encode_image_to_b64(p)
-        content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": "low"}})
-
     payload = {
         "model": MODEL,
         "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": content},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Bitte streng im Format antworten (NAME/TEXT/CATEGORY/PRICE_EUR).\n\n" + ctx_text},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}", "detail": "low"}},
+                ],
+            },
         ],
         "temperature": 0.2,
-        "max_tokens": 260,
+        "response_format": {"type": "json_object"},
+        "max_tokens": 220,
     }
 
     try:
         r = requests.post(OPENAI_URL, json=payload, headers=headers, timeout=25)
+
         if r.status_code != 200:
             print("[KI-DEBUG] HTTP:", r.status_code)
             print("[KI-DEBUG] BODY:", r.text)
+
         r.raise_for_status()
-        content_txt = r.json()["choices"][0]["message"]["content"]
-        parsed = _parse_response(content_txt)
+
+        content = r.json()["choices"][0]["message"]["content"]
+        parsed = _parse_response(content)
         if not parsed:
             print("[KI] Fehler: Antwort konnte nicht geparst werden")
             return None
+
         return parsed
+
     except Exception as e:
         print("[KI] Fehler:", e)
         return None
