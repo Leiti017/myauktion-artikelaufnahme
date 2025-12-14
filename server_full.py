@@ -9,6 +9,12 @@ import io, json
 
 app = FastAPI()
 
+
+
+def _html_nostore(path: Path):
+    html = path.read_text('utf-8')
+    return Response(content=html, media_type='text/html', headers={'Cache-Control':'no-store'})
+
 # CORS für Browser-Frontend
 app.add_middleware(
     CORSMiddleware,
@@ -100,7 +106,7 @@ def root():
         return JSONResponse(
             {"ok": False, "error": "index.html nicht gefunden"}, status_code=500
         )
-    return FileResponse(str(index_path), headers={'Cache-Control':'no-store, max-age=0', 'Pragma':'no-cache'})
+    return FileResponse(str(index_path))
 
 
 @app.get("/admin")
@@ -111,7 +117,7 @@ def admin_root():
         return JSONResponse(
             {"ok": False, "error": "admin.html nicht gefunden"}, status_code=500
         )
-    return FileResponse(str(admin_path), headers={'Cache-Control':'no-store, max-age=0', 'Pragma':'no-cache'})
+    return FileResponse(str(admin_path))
 
 
 @app.get("/api/health")
@@ -358,3 +364,8 @@ def admin_articles_update(data: dict):
     meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
     return {"ok": True}
+
+
+@app.get("/app")
+async def app_page():
+    return _html_nostore(STATIC_DIR / "app.html")
