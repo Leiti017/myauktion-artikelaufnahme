@@ -275,11 +275,23 @@ def _apply_ki_to_meta(mj: Dict[str, Any], meta: Dict[str, Any]) -> None:
     mj["beschreibung"] = meta.get("description", "").strip()
     mj["kategorie"] = meta.get("category", "").strip()
 
-    retail_f = float(meta.get("retail_price", 0.0) or 0.0)
+    retail_new = float(meta.get("retail_price", 0.0) or 0.0)
+    retail_old = float(mj.get("retail_price", 0.0) or 0.0)
+
+    # Preis-Strategie bei Foto2/Fusion:
+    # - Nie nach unten überschreiben (Side-Photo kann zu 1€ führen)
+    # - Erlaubt ist eine Erhöhung, wenn KI beim Detailfoto mehr erkennt
+    retail_f = retail_old
+    if retail_old <= 0 and retail_new > 0:
+        retail_f = retail_new
+    elif retail_new > retail_old:
+        retail_f = retail_new
+
     mj["retail_price"] = round(retail_f, 2)
 
     # Rufpreis: 20% auf ganze € aufrunden
     mj["rufpreis"] = float(math.ceil(retail_f * 0.20)) if retail_f > 0 else 0.0
+
 
 
 def _run_meta_background(artikelnr: str, img_path: Path) -> None:

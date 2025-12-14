@@ -155,25 +155,8 @@
   const fQ = document.getElementById('f-q');
   const btnRefresh = document.getElementById('btn-refresh');
 
-function getToken(){
-  // Safari/Privatmodus kann localStorage zicken -> zusätzlich Token per URL erlauben
-  try{
-    const qs = new URLSearchParams(location.search);
-    const t = qs.get("t");
-    if(t && t.length > 10){
-      localStorage.setItem("MYAUKTION_ADMIN_TOKEN", t);
-      return t;
-    }
-    return localStorage.getItem("MYAUKTION_ADMIN_TOKEN") || "";
-  }catch(e){
-    // Fallback: nur URL
-    const qs = new URLSearchParams(location.search);
-    return qs.get("t") || "";
-  }
-}
-function setToken(t){
-  try{ localStorage.setItem("MYAUKTION_ADMIN_TOKEN", t); }catch(e){}
-}
+  function getToken(){ return localStorage.getItem("MYAUKTION_ADMIN_TOKEN") || ""; }
+  function setToken(t){ localStorage.setItem("MYAUKTION_ADMIN_TOKEN", t); }
 
   async function api(path){
     const t = getToken();
