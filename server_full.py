@@ -32,8 +32,6 @@ def _normalize_title(title: str) -> str:
 # Start:
 #   python -m uvicorn server_full:app --host 0.0.0.0 --port 5050
 
-from __future__ import annotations
-
 from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, Request
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
