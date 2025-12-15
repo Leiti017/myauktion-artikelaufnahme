@@ -1,12 +1,11 @@
-from fastapi import FastAPI, UploadFile, File, Form
-import re
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi import FastAPI, UploadFile, File, Form, Request, Header, HTTPException, Response
+from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from pathlib import Path
 from PIL import Image, ImageOps
-import io, json
+import io, json, re, csv, zipfile, datetime
 
 app = FastAPI()
 
@@ -289,36 +288,24 @@ def save(data: dict):
     return {"ok": True, "saved": str(meta_path)}
 
 
-@app.get("/api/admin/articles")
-def admin_articles(status: str = "unreviewed"):
-    """
-    Liefert eine Liste von Artikeln für die Büro-Kontrolle.
-    status=unreviewed -> nur noch nicht geprüfte
-    status=all        -> alle
-    """
+
+def _admin_collect_items(status: str = "unreviewed"):
     items = []
     for meta_path in RAW_DIR.glob("*.json"):
         try:
             data = json.loads(meta_path.read_text(encoding="utf-8"))
         except Exception:
             continue
-
         artikelnr = str(data.get("artikelnr") or meta_path.stem)
         titel = data.get("titel") or f"Artikel {artikelnr}"
         beschreibung = data.get("beschreibung") or ""
         reviewed = bool(data.get("reviewed", False))
-        ki_source = data.get("ki_source", "")
-
+        ki_source = data.get("ki_source") or data.get("ki_status") or ""
+        # optional images
+        imgs = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
+        img_url = f"/static/uploads/raw/{imgs[0].name}" if imgs else ""
         if status == "unreviewed" and reviewed:
             continue
-
-        # neuestes Bild bestimmen
-        candidates = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
-        img_url = ""
-        if candidates:
-            rel = candidates[-1].relative_to(BASE_DIR)
-            img_url = "/static/" + str(rel).replace("\\", "/")
-
         items.append({
             "artikelnr": artikelnr,
             "titel": titel,
@@ -327,81 +314,69 @@ def admin_articles(status: str = "unreviewed"):
             "reviewed": reviewed,
             "ki_source": ki_source,
         })
-
     items.sort(key=lambda x: x["artikelnr"])
+    return items
 
+
+@app.delete("/api/image")
+def delete_image(artikelnr: str, filename: str):
+    art = str(artikelnr).strip()
+    fn = str(filename).strip()
+    # security: only allow basename, no path traversal
+    if "/" in fn or "\" in fn or ".." in fn:
+        raise HTTPException(status_code=400, detail="invalid filename")
+    p = RAW_DIR / fn
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="file not found")
+    # ensure it belongs to article
+    if not fn.startswith(art + "_"):
+        raise HTTPException(status_code=404, detail="file not found")
+    p.unlink(missing_ok=True)
+    remaining = [f"/static/uploads/raw/{x.name}" for x in sorted(RAW_DIR.glob(f"{art}_*.jpg"))]
+    return {"ok": True, "remaining": remaining}
+
+@app.get("/api/admin/articles")
+def admin_articles(status: str = "unreviewed"):
+    """Liefert eine Liste von Artikeln für die Büro-Kontrolle."""
+    items = _admin_collect_items(status)
     return {"ok": True, "items": items}
 
 
+
 @app.get("/api/admin/export.csv")
-def admin_export_csv(request: Request, category: str = "", only_failed: int = 0, q: str = ""):
-    # Admin-only, but allows downloading a CSV that matches the current filters in Admin UI
-    guard = _admin_guard(request)
-    if guard:
-        return guard
-
-    q = (q or "").strip().lower()
-    rows = []
-    for p in RAW_DIR.glob("*.json"):
-        try:
-            mj = json.loads(p.read_text("utf-8"))
-        except Exception:
-            continue
-
-        nr = str(mj.get("artikelnr", p.stem))
-        cat = (mj.get("kategorie", "") or "").strip()
-        ki_src = (mj.get("ki_source", "") or "").strip()
-
-        if category and cat != category:
-            continue
-        if only_failed and ki_src not in ("failed", "error"):
-            continue
-        if q:
-            hay = (nr + " " + (mj.get("titel", "") or "")).lower()
-            if q not in hay:
-                continue
-
-        pics = sorted(RAW_DIR.glob(f"{nr}_*.jpg"))
-        img_files = [pp.name for pp in pics]
-
-        rows.append({
-            "artikelnr": nr,
-            "titel": mj.get("titel", "") or "",
-            "beschreibung": mj.get("beschreibung", "") or "",
-            "kategorie": cat,
-            "retail_price": mj.get("retail_price", 0.0) or 0.0,
-            "rufpreis": mj.get("rufpreis", 0.0) or 0.0,
-            "einlieferer_id": mj.get("einlieferer_id", "") or "",
-            "mitarbeiter": mj.get("mitarbeiter", "") or "",
-            "reviewed": int(bool(mj.get("reviewed", False))),
-            "ki_source": ki_src,
-            "ki_last_error": mj.get("ki_last_error", "") or "",
-            "images": ";".join(img_files),
-        })
-
-    def _sort_key(x):
-        try:
-            return int(x["artikelnr"])
-        except Exception:
-            return x["artikelnr"]
-
-    rows.sort(key=_sort_key)
-
-    # Build CSV in-memory
-    import io as _io
-    buff = _io.StringIO()
-    fieldnames = ["artikelnr","titel","beschreibung","kategorie","retail_price","rufpreis","einlieferer_id","mitarbeiter","reviewed","ki_source","ki_last_error","images"]
-    w = csv.DictWriter(buff, fieldnames=fieldnames)
-    w.writeheader()
-    for r in rows:
-        w.writerow(r)
-
-    content = buff.getvalue().encode("utf-8")
-    fn = f"artikel_admin_export_{int(time.time())}.csv"
-    return Response(content, media_type="text/csv; charset=utf-8", headers={
-        "Content-Disposition": f'attachment; filename="{fn}"'
+def admin_export_csv(status: str = "all"):
+    items = _admin_collect_items(status)
+    # CSV in memory
+    buf = io.StringIO()
+    writer = csv.writer(buf, delimiter=";")
+    writer.writerow(["artikelnr","titel","beschreibung","reviewed","ki_source"])
+    for it in items:
+        writer.writerow([it.get("artikelnr",""), it.get("titel",""), it.get("beschreibung",""), int(bool(it.get("reviewed"))), it.get("ki_source","")])
+    data = buf.getvalue().encode("utf-8")
+    filename = f"artikel_export_{status}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    return Response(content=data, media_type="text/csv; charset=utf-8", headers={
+        "Content-Disposition": f'attachment; filename="{filename}"'
     })
 
+
+@app.get("/api/admin/photos.zip")
+def admin_export_photos_zip(status: str = "all"):
+    items = _admin_collect_items(status)
+    mem = io.BytesIO()
+    with zipfile.ZipFile(mem, "w", compression=zipfile.ZIP_DEFLATED) as z:
+        for it in items:
+            art = str(it.get("artikelnr",""))
+            for img_path in sorted(RAW_DIR.glob(f"{art}_*.jpg")):
+                # zip path: artikelnr/filename
+                z.write(img_path, arcname=f"{art}/{img_path.name}")
+            meta_path = RAW_DIR / f"{art}.json"
+            if meta_path.exists():
+                z.write(meta_path, arcname=f"{art}/{meta_path.name}")
+    mem.seek(0)
+    filename = f"fotos_{status}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
+    return StreamingResponse(mem, media_type="application/zip", headers={
+        "Content-Disposition": f'attachment; filename="{filename}"'
+    })
 
 @app.post("/api/admin/articles/update")
 def admin_articles_update(data: dict):

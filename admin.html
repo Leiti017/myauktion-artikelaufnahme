@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
   <meta charset="utf-8">
-  <title>MyAuktion · Admin • 20251215_064022</title>
+  <title>MyAuktion · KI-Kontrolle</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
@@ -96,6 +96,8 @@
         <button id="btn-reload" class="btn btn-ghost">
           🔄 Neu laden
         </button>
+        <button id="btn-download-csv" class="btn btn-ghost">⬇️ CSV</button>
+        <button id="btn-download-zip" class="btn btn-ghost">📦 Fotos ZIP</button>
       </div>
     </header>
 
@@ -238,6 +240,24 @@
     btnReload.addEventListener('click', loadArticles);
 
     document.addEventListener('DOMContentLoaded', loadArticles);
-  </script>
+  
+  // Downloads
+  const btnCsv = document.getElementById('btn-download-csv');
+  const btnZip = document.getElementById('btn-download-zip');
+  function currentStatus(){ return document.getElementById('filter-status')?.value || 'all'; }
+  if(btnCsv){
+    btnCsv.addEventListener('click', ()=>{
+      const st = currentStatus();
+      window.location.href = `/api/admin/export.csv?status=${encodeURIComponent(st)}`;
+    });
+  }
+  if(btnZip){
+    btnZip.addEventListener('click', ()=>{
+      const st = currentStatus();
+      window.location.href = `/api/admin/photos.zip?status=${encodeURIComponent(st)}`;
+    });
+  }
+
+</script>
 </body>
 </html>
