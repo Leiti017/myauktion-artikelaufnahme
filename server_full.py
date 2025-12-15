@@ -114,11 +114,6 @@ def _default_meta(artikelnr: str) -> Dict[str, Any]:
         "lagerort": "",
         "einlieferer": "",
         "mitarbeiter": "",
-        "menge": 1,
-        "uebernehmen": 1,
-        "einlieferer_id": "",
-        "angeliefert": "",
-        "betriebsmittel": "",
         "lagerstand": 1,
         "reviewed": False,
         "ki_source": "",          # pending | realtime | failed | ""
@@ -200,16 +195,17 @@ def _usage_fail(err: str) -> None:
 CSV_FIELDS = [
     "ArtikelNr",
     "Menge",
+    "Kategorie",
     "Bezeichnung",
     "Beschreibung",
-    "Preis",
-    "Lagerort",
+    "Rufpreis",
     "Lagerstand",
-    "uebernehmen",
-    "Einlieferer-ID",
-    "angeliefert",
-    "Betriebsmittel",
+    "Lagerort",
+    "Einlieferer",
+    "Mitarbeiter",
+    "RetailPreis",
 ]
+
 
 def _rebuild_csv_export() -> None:
     rows = []
@@ -220,37 +216,18 @@ def _rebuild_csv_export() -> None:
             continue
 
         nr = str(d.get("artikelnr") or meta_file.stem)
-
-        # Defaults / settings
-        def _to_int(v, default=1):
-            try:
-                return int(v)
-            except Exception:
-                return int(default)
-
-        menge = _to_int(d.get("menge", 1), 1)
-        lagerstand = _to_int(d.get("lagerstand", 1), 1)
-        uebernehmen = _to_int(d.get("uebernehmen", 1), 1)
-
-        einlieferer_id = (d.get("einlieferer_id") or d.get("einlieferer") or "").strip()
-        angeliefert = (d.get("angeliefert") or "").strip()
-        betriebsmittel = (d.get("betriebsmittel") or "").strip()
-
-        # Preis = Rufpreis (wie gewünscht)
-        preis = d.get("rufpreis", 0.0) or 0.0
-
         rows.append({
             "ArtikelNr": nr,
-            "Menge": menge,
+            "Menge": 1,
+            "Kategorie": d.get("kategorie", "") or "",
             "Bezeichnung": d.get("titel", "") or "",
             "Beschreibung": d.get("beschreibung", "") or "",
-            "Preis": preis,
+            "Rufpreis": d.get("rufpreis", 0.0) or 0.0,
+            "Lagerstand": d.get("lagerstand", 1) or 1,
             "Lagerort": d.get("lagerort", "") or "",
-            "Lagerstand": lagerstand,
-            "uebernehmen": uebernehmen,
-            "Einlieferer-ID": einlieferer_id,
-            "angeliefert": angeliefert,
-            "Betriebsmittel": betriebsmittel,
+            "Einlieferer": d.get("einlieferer", "") or "",
+            "Mitarbeiter": d.get("mitarbeiter", "") or "",
+            "RetailPreis": d.get("retail_price", 0.0) or 0.0,
         })
 
     def _sort_key(r):
@@ -269,9 +246,6 @@ def _rebuild_csv_export() -> None:
 
     print("[CSV] Export aktualisiert:", EXPORT_CSV)
 
-
-# ----------------------------
-# KI
 
 # ----------------------------
 # KI (1 Versuch, kein Fallback, mit Kontext fürs 2. Foto)
@@ -377,103 +351,45 @@ def health():
     return {"ok": True}
 
 
+
+@app.post("/api/delete_last_image")
+def delete_last_image(data: Dict[str, Any]):
+    """Löscht das zuletzt hochgeladene Bild für eine Artikelnummer (für die Hauptmaske)."""
+    artikelnr = str(data.get("artikelnr", "")).strip()
+    if not artikelnr:
+        return JSONResponse({"ok": False, "error": "Artikelnummer fehlt"}, status_code=400)
+
+    pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
+    if not pics:
+        return {"ok": True, "deleted": None}
+
+    last = pics[-1]
+    try:
+        last.unlink()
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"Delete failed: {e}"}, status_code=500)
+
+    # update meta image to previous
+    mj = _load_meta_json(artikelnr)
+    pics2 = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
+    img_url = ""
+    if pics2:
+        try:
+            rel = pics2[-1].relative_to(BASE_DIR)
+            img_url = "/static/" + str(rel).replace("\\", "/")
+        except Exception:
+            img_url = ""
+    mj["image"] = img_url
+    _save_meta_json(artikelnr, mj)
+    _rebuild_csv_export()
+    return {"ok": True, "deleted": last.name}
+
 @app.get("/api/export.csv")
-def export_csv(from_nr: str = "", to_nr: str = "", mitarbeiter: str = "", reviewed: int = -1):
-    """CSV Export (neues Schema) mit optionalen Filtern.
-    - from_nr/to_nr: Nummernkreis inklusiv
-    - mitarbeiter: exakter Match (case-insensitive)
-    - reviewed: 1 => nur reviewed, 0 => nur nicht reviewed, -1 => alle
-    """
+def export_csv():
+    if not EXPORT_CSV.exists():
+        _rebuild_csv_export()
+    return FileResponse(str(EXPORT_CSV), filename="artikel_export.csv", media_type="text/csv")
 
-    def _nr_in_range(nr: str) -> bool:
-        if not from_nr and not to_nr:
-            return True
-        try:
-            n = int(nr)
-        except Exception:
-            return False
-        if from_nr:
-            try:
-                if n < int(from_nr):
-                    return False
-            except Exception:
-                pass
-        if to_nr:
-            try:
-                if n > int(to_nr):
-                    return False
-            except Exception:
-                pass
-        return True
-
-    def _to_int(v, default=1):
-        try:
-            return int(v)
-        except Exception:
-            return int(default)
-
-    rows = []
-    for meta_file in RAW_DIR.glob("*.json"):
-        try:
-            d = json.loads(meta_file.read_text("utf-8"))
-        except Exception:
-            continue
-
-        nr = str(d.get("artikelnr") or meta_file.stem)
-        if not _nr_in_range(nr):
-            continue
-
-        mit = (d.get("mitarbeiter") or "").strip()
-        if mitarbeiter and mit.lower() != mitarbeiter.strip().lower():
-            continue
-
-        if reviewed in (0, 1):
-            if bool(d.get("reviewed", False)) != bool(reviewed):
-                continue
-
-        menge = _to_int(d.get("menge", 1), 1)
-        lagerstand = _to_int(d.get("lagerstand", 1), 1)
-        uebernehmen = _to_int(d.get("uebernehmen", 1), 1)
-
-        einlieferer_id = (d.get("einlieferer_id") or d.get("einlieferer") or "").strip()
-        angeliefert = (d.get("angeliefert") or "").strip()
-        betriebsmittel = (d.get("betriebsmittel") or "").strip()
-        preis = d.get("rufpreis", 0.0) or 0.0
-
-        rows.append({
-            "ArtikelNr": nr,
-            "Menge": menge,
-            "Bezeichnung": d.get("titel", "") or "",
-            "Beschreibung": d.get("beschreibung", "") or "",
-            "Preis": preis,
-            "Lagerort": d.get("lagerort", "") or "",
-            "Lagerstand": lagerstand,
-            "uebernehmen": uebernehmen,
-            "Einlieferer-ID": einlieferer_id,
-            "angeliefert": angeliefert,
-            "Betriebsmittel": betriebsmittel,
-        })
-
-    def _sort_key(r):
-        try:
-            return int(r["ArtikelNr"])
-        except Exception:
-            return r["ArtikelNr"]
-
-    rows.sort(key=_sort_key)
-
-    out = io.StringIO()
-    w = csv.DictWriter(out, fieldnames=CSV_FIELDS, delimiter=";")
-    w.writeheader()
-    for r in rows:
-        w.writerow(r)
-
-    data = out.getvalue().encode("utf-8")
-    return Response(content=data, media_type="text/csv",
-                    headers={"Content-Disposition": "attachment; filename=artikel_export.csv"})
-
-
-@app.get("/api/admin/images.zip")
 
 @app.get("/api/admin/images.zip")
 def admin_images_zip(request: Request, category: str = "", only_failed: int = 0):
@@ -641,11 +557,6 @@ def meta(artikelnr: str):
         "retail_price": mj.get("retail_price", 0.0) or 0.0,
         "rufpreis": mj.get("rufpreis", 0.0) or 0.0,
         "lagerort": mj.get("lagerort", "") or "",
-        "menge": mj.get("menge", 1) or 1,
-        "uebernehmen": mj.get("uebernehmen", 1) or 1,
-        "einlieferer_id": mj.get("einlieferer_id", mj.get("einlieferer","")) or "",
-        "angeliefert": mj.get("angeliefert", "") or "",
-        "betriebsmittel": mj.get("betriebsmittel", "") or "",
         "einlieferer": mj.get("einlieferer", "") or "",
         "mitarbeiter": mj.get("mitarbeiter", "") or "",
         "reviewed": bool(mj.get("reviewed", False)),
@@ -663,42 +574,36 @@ def save(data: Dict[str, Any]):
         return JSONResponse({"ok": False, "error": "Artikelnummer fehlt"}, status_code=400)
 
     mj = _load_meta_json(artikelnr)
-
-    # Textfelder
-    for k in ["titel", "beschreibung", "lagerort", "mitarbeiter", "kategorie", "betriebsmittel", "angeliefert", "einlieferer_id"]:
+    for k in ["titel", "beschreibung", "lagerort", "einlieferer", "mitarbeiter", "kategorie"]:
         if k in data and data[k] is not None:
-            mj[k] = str(data[k]).strip()
-
-    # Backward compatibility: falls Frontend noch "einlieferer" sendet
-    if ("einlieferer" in data) and (data["einlieferer"] is not None) and not mj.get("einlieferer_id"):
-        mj["einlieferer_id"] = str(data["einlieferer"]).strip()
-    # Keep old field too (harmless)
-    if "einlieferer" in data and data["einlieferer"] is not None:
-        mj["einlieferer"] = str(data["einlieferer"]).strip()
-
-    # Zahlenfelder
-    def _to_int(v, default=1):
-        try:
-            return int(v)
-        except Exception:
-            return int(default)
-
-    if "menge" in data:
-        mj["menge"] = _to_int(data.get("menge", 1), 1)
-    if "lagerstand" in data:
-        mj["lagerstand"] = _to_int(data.get("lagerstand", 1), 1)
-    if "uebernehmen" in data:
-        mj["uebernehmen"] = _to_int(data.get("uebernehmen", 1), 1)
-
+            mj[k] = str(data[k])
     if "reviewed" in data:
         mj["reviewed"] = bool(data.get("reviewed", False))
 
-    _save_meta_json(artikelnr, mj)
+    
+
+    # Preis-System / manuelle Preise
+    def _to_float(v, default=0.0):
+        try:
+            if v is None or str(v).strip() == "":
+                return float(default)
+            return float(v)
+        except Exception:
+            return float(default)
+
+    if "price_system_enabled" in data:
+        mj["price_system_enabled"] = bool(data.get("price_system_enabled", True))
+
+    if "retail_price" in data:
+        rp = data.get("retail_price")
+        mj["retail_price"] = "" if (rp is None or str(rp).strip() == "") else _to_float(rp, 0.0)
+
+    if "rufpreis" in data:
+        mj["rufpreis"] = _to_float(data.get("rufpreis"), 0.0)
+_save_meta_json(artikelnr, mj)
     _rebuild_csv_export()
     return {"ok": True}
 
-
-@app.get("/api/describe")
 
 @app.get("/api/describe")
 def describe(artikelnr: str):
@@ -753,14 +658,6 @@ def describe(artikelnr: str):
 # ----------------------------
 # Admin API (Token geschützt)
 # ----------------------------
-
-@app.get("/api/admin/export.csv")
-def admin_export_csv(request: Request, from_nr: str = "", to_nr: str = "", mitarbeiter: str = "", reviewed: int = -1):
-    guard = _admin_guard(request)
-    if guard:
-        return guard
-    return export_csv(from_nr=from_nr, to_nr=to_nr, mitarbeiter=mitarbeiter, reviewed=reviewed)
-
 @app.get("/api/admin/budget")
 def admin_budget(request: Request):
     guard = _admin_guard(request)
@@ -844,5 +741,4 @@ def admin_articles(request: Request, category: str = "", only_failed: int = 0):
     items.sort(key=_sort_key)
     return {"ok": True, "items": items}
 
-
-# build:20251215_093439
+# build:20251215_161450
