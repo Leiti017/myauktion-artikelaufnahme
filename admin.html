@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="de">
 <head>
-    <!-- build:CSV_RANGE_20251215_195906 -->
+    <!-- build:20251215_062635 -->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
@@ -55,8 +55,17 @@
           <div class="text-lg font-bold">KI Budget (geschätzt)</div>
           <div class="text-xs opacity-80">Schätzung basiert auf erfolgreichen KI-Aufrufen (fixer €/Call). OpenAI-Hardlimit steuerst du im Dashboard.</div>
         </div>
-        <div class="flex gap-2">
-          <a href="/api/export.csv" class="btn btn-primary">CSV downloaden</a>
+        <div class="flex flex-wrap items-center gap-2">
+          <a href="/api/export.csv" class="btn btn-primary">CSV (alle) downloaden</a>
+
+          <div class="glass rounded-xl p-2 flex items-center gap-2">
+            <span class="text-xs opacity-80">Von</span>
+            <input id="exp-from" type="number" class="input !w-32" placeholder="123458">
+            <span class="text-xs opacity-80">Bis</span>
+            <input id="exp-to" type="number" class="input !w-32" placeholder="123480">
+            <button id="btn-export-range" class="btn btn-ghost">Bereich exportieren</button>
+          </div>
+
           <button id="btn-refresh" class="btn btn-primary">Refresh</button>
         </div>
       </div>
@@ -159,6 +168,9 @@
   const fFailed = document.getElementById('f-failed');
   const fQ = document.getElementById('f-q');
   const btnRefresh = document.getElementById('btn-refresh');
+  const expFrom = document.getElementById('exp-from');
+  const expTo = document.getElementById('exp-to');
+  const btnExportRange = document.getElementById('btn-export-range');
 
 function getToken(){
   // Safari/Privatmodus kann localStorage zicken -> zusätzlich Token per URL erlauben
