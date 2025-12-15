@@ -601,8 +601,8 @@ def save(data: Dict[str, Any]):
     if "rufpreis" in data:
         mj["rufpreis"] = _to_float(data.get("rufpreis"), 0.0)
 _save_meta_json(artikelnr, mj)
-    _rebuild_csv_export()
-    return {"ok": True}
+_rebuild_csv_export()
+return {"ok": True}
 
 
 @app.get("/api/describe")
