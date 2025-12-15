@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="de">
 <head>
-  <!-- build:LIVE_SETTINGS_PRICE_LOGO_20251215_184718 -->
+  <!-- build:NEXT_ARTICLE_20251215_193134 -->
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>MyAuktion · Artikelaufnahme</title>
@@ -528,6 +528,27 @@
     setPill(false);
     toast("KI übernommen");
   };
+  function goNextArticle(){
+    const cur = (fArt.value||"").trim();
+    if(!/^[0-9]{1,}$/.test(cur)) return;
+    const next = String(parseInt(cur,10) + 1);
+    fArt.value = next;
+    if(typeof updateArtnrHint === "function") updateArtnrHint();
+    // Reset UI for next item (keep Lagerort + Settings)
+    thumb.innerHTML = '<span class="text-xs text-white/70 text-center">Tippen, um Foto aufzunehmen / auszuwählen</span>';
+    imgStrip.innerHTML = "";
+    fFile.value = "";
+    fTitle.value = "";
+    fDesc.value = "";
+    fRetail.value = "";
+    fRuf.value = "";
+    if(typeof applyPriceMode === "function") applyPriceMode();
+    statusText.textContent = "Bereit.";
+    try{ window.scrollTo({top:0, behavior:"smooth"});}catch(e){}
+    fArt.focus();
+  }
+
+
 
   btnSave.onclick = async ()=>{
     if(!validArtNr()) return alert("Artikelnummer muss mindestens 6-stellig sein.");
@@ -568,7 +589,9 @@
     }
     toast("Gespeichert");
     log("Gespeichert: " + art);
-  };
+  
+    goNextArticle();
+};
 
   window.addEventListener('DOMContentLoaded', ()=>{
     if(window.lucide) lucide.createIcons();
