@@ -15,7 +15,7 @@
 # Start:
 #   python -m uvicorn server_full:app --host 0.0.0.0 --port 5050
 from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, Request, Response
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -34,7 +34,7 @@ def _normalize_title(title: str) -> str:
 
 from pathlib import Path
 from PIL import Image, ImageOps
-import io, json, time, csv, math, os
+import io, json, time, csv, math, os, zipfile
 import re
 from typing import Any, Dict, Optional, Tuple
 
@@ -358,6 +358,51 @@ def export_csv():
     return FileResponse(str(EXPORT_CSV), filename="artikel_export.csv", media_type="text/csv")
 
 
+@app.get("/api/admin/images.zip")
+def admin_images_zip(request: Request, category: str = "", only_failed: int = 0):
+    guard = _admin_guard(request)
+    if guard:
+        return guard
+
+    # Artikelliste nach Filtern zusammenstellen
+    art_nrs = []
+    for p in RAW_DIR.glob("*.json"):
+        try:
+            mj = json.loads(p.read_text("utf-8"))
+        except Exception:
+            continue
+
+        nr = str(mj.get("artikelnr", p.stem))
+        cat = (mj.get("kategorie", "") or "").strip()
+
+        if category and cat.lower() != category.strip().lower():
+            continue
+        if only_failed and (mj.get("ki_source") != "failed"):
+            continue
+
+        art_nrs.append(nr)
+
+    def _iter_zip():
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as z:
+            for nr in sorted(art_nrs, key=lambda x: int(x) if str(x).isdigit() else str(x)):
+                pics = sorted(RAW_DIR.glob(f"{nr}_*.jpg"))
+                for pic in pics:
+                    # Im ZIP in einen Ordner pro Artikel, damit Dateinamen nicht kollidieren
+                    arcname = f"{nr}/{pic.name}"
+                    try:
+                        z.write(pic, arcname=arcname)
+                    except Exception:
+                        # einzelne Dateien überspringen, ZIP trotzdem liefern
+                        continue
+
+        buf.seek(0)
+        yield from iter(lambda: buf.read(1024 * 256), b"")
+
+    filename = "myauktion_fotos.zip"
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    return StreamingResponse(_iter_zip(), media_type="application/zip", headers=headers)
+
 @app.get("/api/next_artikelnr")
 def next_artikelnr():
     max_nr = 0
@@ -607,9 +652,16 @@ def admin_articles(request: Request, category: str = "", only_failed: int = 0):
 
         pics = sorted(RAW_DIR.glob(f"{nr}_*.jpg"))
         img_url = ""
+        images = []
         if pics:
-            rel = pics[-1].relative_to(BASE_DIR)
-            img_url = "/static/" + str(rel).replace("\\", "/")
+            rel_last = pics[-1].relative_to(BASE_DIR)
+            img_url = "/static/" + str(rel_last).replace("\\", "/")
+            for pic in pics:
+                rel = pic.relative_to(BASE_DIR)
+                images.append({
+                    "filename": pic.name,
+                    "url": "/static/" + str(rel).replace("\\", "/"),
+                })
 
         items.append({
             "artikelnr": nr,
@@ -623,6 +675,8 @@ def admin_articles(request: Request, category: str = "", only_failed: int = 0):
             "ki_last_error": mj.get("ki_last_error", "") or "",
             "last_image": mj.get("last_image", "") or "",
             "image": img_url,
+            "images": images,
+            "image_count": len(images),
         })
 
     def _sort_key(x):

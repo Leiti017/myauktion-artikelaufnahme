@@ -57,6 +57,7 @@
         </div>
         <div class="flex gap-2">
           <a href="/api/export.csv" class="btn btn-primary">CSV downloaden</a>
+          <button id="btn-zip" class="btn btn-primary">Fotos ZIP</button>
           <button id="btn-refresh" class="btn btn-primary">Refresh</button>
         </div>
       </div>
@@ -131,6 +132,7 @@
               <th class="py-2 pr-3">Listenpreis</th>
               <th class="py-2 pr-3">Rufpreis</th>
               <th class="py-2 pr-3">Status</th>
+              <th class="py-2 pr-3">Reviewed</th>
               <th class="py-2 pr-3">Fehler</th>
             </tr>
           </thead>
@@ -159,6 +161,7 @@
   const fFailed = document.getElementById('f-failed');
   const fQ = document.getElementById('f-q');
   const btnRefresh = document.getElementById('btn-refresh');
+  const btnZip = document.getElementById('btn-zip');
 
 function getToken(){
   // Safari/Privatmodus kann localStorage zicken -> zusätzlich Token per URL erlauben
@@ -198,7 +201,19 @@ function setToken(t){
     });
 
     rowsEl.innerHTML = filtered.map(it=>{
-      const img = it.image ? `<img src="${it.image}" style="height:54px;border-radius:12px;border:1px solid rgba(255,255,255,.25)">` : '';
+      const imgs = Array.isArray(it.images) && it.images.length ? it.images : (it.image ? [{url: it.image, filename: it.last_image||""}] : []);
+      const img = imgs.length ? `
+        <div class="flex gap-2 flex-wrap">
+          ${imgs.map(im=>`
+            <div class="relative">
+              <img src="${im.url}" style="height:54px;border-radius:12px;border:1px solid rgba(255,255,255,.25)">
+              <button class="btn-del-img" data-art="${it.artikelnr}" data-file="${im.filename||""}"
+                title="Foto löschen"
+                style="position:absolute;top:-6px;right:-6px;width:20px;height:20px;border-radius:999px;background:rgba(239,68,68,.95);color:#fff;font-weight:900;display:flex;align-items:center;justify-content:center;line-height:1">×</button>
+            </div>
+          `).join("")}
+        </div>
+      ` : '';
       const st = [];
       if(it.reviewed) st.push(badge("reviewed","bad-green"));
       if(it.ki_source === "failed") st.push(badge("KI failed","bad-red"));
@@ -214,6 +229,7 @@ function setToken(t){
           <td class="py-2 pr-3">${money(Number(it.retail_price||0))}</td>
           <td class="py-2 pr-3">${money(Number(it.rufpreis||0))}</td>
           <td class="py-2 pr-3">${st.join(" ")}</td>
+          <td class="py-2 pr-3"><input type="checkbox" class="review-box" data-art="${it.artikelnr}" ${it.reviewed ? "checked" : ""}></td>
           <td class="py-2 pr-3 text-xs opacity-90">${(it.ki_last_error||"")}</td>
         </tr>
       `;
@@ -264,10 +280,63 @@ function setToken(t){
   };
 
   btnRefresh.onclick = refresh;
+
+  btnZip.onclick = ()=>{
+    const t = getToken();
+    const cat = (fCat.value || "").trim();
+    const only_failed = fFailed.value || "0";
+    const qs = new URLSearchParams();
+    if(t) qs.set("token", t);
+    if(cat) qs.set("category", cat);
+    if(only_failed === "1") qs.set("only_failed", "1");
+    window.open("/api/admin/images.zip?" + qs.toString(), "_blank");
+  };
   fCat.onchange = refresh;
   fFailed.onchange = refresh;
   fQ.oninput = ()=> init();
 
+
+  // Actions (delete image / toggle reviewed)
+  rowsEl.addEventListener("click", async (ev)=>{
+    const btn = ev.target.closest(".btn-del-img");
+    if(!btn) return;
+    const art = btn.getAttribute("data-art") || "";
+    const file = btn.getAttribute("data-file") || "";
+    if(!art || !file) return;
+    if(!confirm(`Foto ${file} wirklich löschen?`)) return;
+    try{
+      const res = await fetch("/api/delete_image", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({artikelnr: art, filename: file})
+      });
+      const j = await res.json();
+      if(!res.ok || !j.ok) throw new Error(j.error || res.status);
+      await refresh();
+    }catch(e){
+      alert("Löschen fehlgeschlagen: " + (e.message || e));
+    }
+  });
+
+  rowsEl.addEventListener("change", async (ev)=>{
+    const cb = ev.target.closest(".review-box");
+    if(!cb) return;
+    const art = cb.getAttribute("data-art") || "";
+    const reviewed = !!cb.checked;
+    try{
+      const res = await fetch("/api/save", {
+        method:"POST",
+        headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({artikelnr: art, reviewed})
+      });
+      const j = await res.json();
+      if(!res.ok || !j.ok) throw new Error(j.error || res.status);
+      // UI badges werden bei Refresh korrekt gerendert
+      await refresh();
+    }catch(e){
+      alert("Reviewed speichern fehlgeschlagen: " + (e.message || e));
+    }
+  });
   init();
 </script>
 </body>
