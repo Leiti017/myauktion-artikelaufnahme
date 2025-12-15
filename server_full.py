@@ -189,94 +189,74 @@ def _usage_fail(err: str) -> None:
     _save_usage(u)
 
 
+
 # ----------------------------
 # CSV Export
 # ----------------------------
+# Gewünschte Reihenfolge (Variante A):
+# ArtikelNr, Menge, Bezeichnung, Beschreibung, Preis, Lagerort, Lagerstand, uebernehmen,
+# Einlieferer-ID, angeliefert, Betriebsmittel
 CSV_FIELDS = [
     "ArtikelNr",
     "Menge",
-    "Kategorie",
     "Bezeichnung",
     "Beschreibung",
-    "Rufpreis",
-    "Lagerstand",
+    "Preis",
     "Lagerort",
-    "Einlieferer",
-    "Mitarbeiter",
-    "RetailPreis",
+    "Lagerstand",
+    "uebernehmen",
+    "Einlieferer-ID",
+    "angeliefert",
+    "Betriebsmittel",
 ]
 
-
-def _update_csv_row_fast(artikelnr) -> None:
-    rows = []
-    for meta_file in RAW_DIR.glob("*.json"):
-        try:
-            d = json.loads(meta_file.read_text("utf-8"))
-        except Exception:
-            continue
-
-        nr = str(d.get("artikelnr") or meta_file.stem)
-        rows.append({
-            "ArtikelNr": nr,
-            "Menge": 1,
-            "Kategorie": d.get("kategorie", "") or "",
-            "Bezeichnung": d.get("titel", "") or "",
-            "Beschreibung": d.get("beschreibung", "") or "",
-            "Rufpreis": d.get("rufpreis", 0.0) or 0.0,
-            "Lagerstand": d.get("lagerstand", 1) or 1,
-            "Lagerort": d.get("lagerort", "") or "",
-            "Einlieferer": d.get("einlieferer", "") or "",
-            "Mitarbeiter": d.get("mitarbeiter", "") or "",
-            "RetailPreis": d.get("retail_price", 0.0) or 0.0,
-        })
-
-    def _sort_key(r):
-        try:
-            return int(r["ArtikelNr"])
-        except Exception:
-            return r["ArtikelNr"]
-
-    rows.sort(key=_sort_key)
-
-    with EXPORT_CSV.open("w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=CSV_FIELDS, delimiter=";")
-        w.writeheader()
-        for r in rows:
-            w.writerow(r)
-
-    print("[CSV] Export aktualisiert:", EXPORT_CSV)
-
-
 def _csv_row_from_meta(d: Dict[str, Any], fallback_nr: str) -> Dict[str, Any]:
-    """Build one CSV row from a single meta json."""
     nr = str(d.get("artikelnr") or fallback_nr)
     return {
         "ArtikelNr": nr,
-        # Defaults/Settings-driven fields (already stored in meta by frontend)
         "Menge": d.get("menge", 1) or 1,
-        "Kategorie": d.get("kategorie", "") or "",
         "Bezeichnung": d.get("titel", "") or "",
         "Beschreibung": d.get("beschreibung", "") or "",
-        "Rufpreis": d.get("rufpreis", 0.0) or 0.0,
-        "Preis": d.get("preis", "") or "",
+        # "Preis" = Rufpreis (bei euch der Auktions-Startpreis)
+        "Preis": d.get("rufpreis", 0) or 0,
         "Lagerort": d.get("lagerort", "") or "",
         "Lagerstand": d.get("lagerstand", 1) or 1,
         "uebernehmen": d.get("uebernehmen", 1) or 1,
         "Einlieferer-ID": d.get("einlieferer_id", d.get("einlieferer", "")) or "",
         "angeliefert": d.get("angeliefert", "") or "",
         "Betriebsmittel": d.get("betriebsmittel", "") or "",
-        "RetailPreis": d.get("retail_price", "") or "",
     }
 
-def _update_csv_row_fast(artikelnr: str) -> None:
-    """Update only one row in artikel_export.csv instead of rebuilding from all *.json.
+def _rebuild_csv_export() -> None:
+    rows: list[Dict[str, Any]] = []
+    for meta_file in sorted(RAW_DIR.glob("*.json")):
+        try:
+            d = json.loads(meta_file.read_text("utf-8"))
+        except Exception:
+            continue
+        rows.append(_csv_row_from_meta(d, meta_file.stem))
 
-    This makes 'Speichern' much faster when many articles exist.
-    """
+    def _sort_key(r):
+        try:
+            return int(str(r.get("ArtikelNr","")).strip())
+        except Exception:
+            return str(r.get("ArtikelNr",""))
+
+    rows.sort(key=_sort_key)
+    with EXPORT_CSV.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=CSV_FIELDS, delimiter=";")
+        w.writeheader()
+        for r in rows:
+            w.writerow({k: r.get(k, "") for k in CSV_FIELDS})
+
+    print("[CSV] Export rebuilt:", EXPORT_CSV)
+
+def _update_csv_row_fast(artikelnr: str) -> None:
+    """Update only one row in artikel_export.csv (fast)."""
     d = _load_meta_json(artikelnr) or {}
     row_new = _csv_row_from_meta(d, artikelnr)
 
-    rows: List[Dict[str, Any]] = []
+    rows: list[Dict[str, Any]] = []
     found = False
 
     if EXPORT_CSV.exists():
@@ -284,14 +264,13 @@ def _update_csv_row_fast(artikelnr: str) -> None:
             with EXPORT_CSV.open("r", encoding="utf-8") as f:
                 r = csv.DictReader(f, delimiter=";")
                 for row in r:
-                    if str(row.get("ArtikelNr", "")).strip() == str(artikelnr).strip():
+                    nr = str(row.get("ArtikelNr","")).strip()
+                    if nr == str(artikelnr).strip():
                         rows.append(row_new)
                         found = True
                     else:
-                        # normalize to our fields (keep unknown out)
                         rows.append({k: row.get(k, "") for k in CSV_FIELDS})
         except Exception:
-            # fallback if csv is corrupted
             rows = []
             found = False
 
@@ -300,19 +279,18 @@ def _update_csv_row_fast(artikelnr: str) -> None:
 
     def _sort_key(r):
         try:
-            return int(str(r.get("ArtikelNr", "")).strip())
+            return int(str(r.get("ArtikelNr","")).strip())
         except Exception:
-            return str(r.get("ArtikelNr", ""))
+            return str(r.get("ArtikelNr",""))
 
     rows.sort(key=_sort_key)
-
     with EXPORT_CSV.open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=CSV_FIELDS, delimiter=";")
         w.writeheader()
         for r in rows:
             w.writerow({k: r.get(k, "") for k in CSV_FIELDS})
 
-    print("[CSV] Row updated:", artikelnr, "->", EXPORT_CSV)
+    # print("[CSV] Row updated:", artikelnr)
 
 
 # ----------------------------
@@ -422,7 +400,7 @@ def health():
 @app.get("/api/export.csv")
 def export_csv():
     if not EXPORT_CSV.exists():
-        _update_csv_row_fast(artikelnr)
+        _rebuild_csv_export()
     return FileResponse(str(EXPORT_CSV), filename="artikel_export.csv", media_type="text/csv")
 
 
@@ -497,6 +475,34 @@ def images(artikelnr: str):
     return {"ok": True, "files": files}
 
 
+
+@app.post("/api/delete_last_image")
+def delete_last_image(payload: Dict[str, Any]):
+    artikelnr = str(payload.get("artikelnr", "")).strip()
+    if not artikelnr:
+        return JSONResponse({"ok": False, "error": "artikelnr fehlt"}, status_code=400)
+
+    pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
+    if not pics:
+        return JSONResponse({"ok": False, "error": "Keine Bilder gefunden"}, status_code=404)
+
+    path = pics[-1]
+    try:
+        path.unlink()
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"löschen fehlgeschlagen: {e}"}, status_code=500)
+
+    mj = _load_meta_json(artikelnr)
+    pics2 = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
+    mj["last_image"] = pics2[-1].name if pics2 else ""
+    _save_meta_json(artikelnr, mj)
+
+    # CSV muss hierfür nicht unbedingt neu, aber Row-Update ist schnell
+    _update_csv_row_fast(artikelnr)
+
+    return {"ok": True, "deleted": path.name}
+
+
 @app.post("/api/delete_image")
 def delete_image(payload: Dict[str, Any]):
     artikelnr = str(payload.get("artikelnr", "")).strip()
@@ -557,6 +563,7 @@ def meta(artikelnr: str):
     }
 
 
+
 @app.post("/api/save")
 def save(data: Dict[str, Any]):
     artikelnr = str(data.get("artikelnr", "")).strip()
@@ -564,15 +571,43 @@ def save(data: Dict[str, Any]):
         return JSONResponse({"ok": False, "error": "Artikelnummer fehlt"}, status_code=400)
 
     mj = _load_meta_json(artikelnr)
-    for k in ["titel", "beschreibung", "lagerort", "einlieferer", "mitarbeiter", "kategorie"]:
+
+    # Textfelder
+    for k in ["titel", "beschreibung", "lagerort", "kategorie", "einlieferer", "mitarbeiter", "angeliefert", "betriebsmittel"]:
         if k in data and data[k] is not None:
             mj[k] = str(data[k])
+
+    # IDs / Zahlenfelder
+    if "einlieferer_id" in data and data["einlieferer_id"] is not None:
+        mj["einlieferer_id"] = str(data["einlieferer_id"])
+
+    for k in ["menge", "lagerstand", "uebernehmen"]:
+        if k in data and data[k] is not None:
+            try:
+                mj[k] = int(data[k])
+            except Exception:
+                pass
+
+    # Preise (Rufpreis + Listenpreis optional)
+    if "rufpreis" in data and data["rufpreis"] is not None:
+        try:
+            mj["rufpreis"] = float(data["rufpreis"])
+        except Exception:
+            pass
+    if "retail_price" in data:
+        # retail_price darf leer sein (Preis-System AUS)
+        try:
+            mj["retail_price"] = float(data["retail_price"]) if str(data["retail_price"]).strip() != "" else 0.0
+        except Exception:
+            mj["retail_price"] = 0.0
+
     if "reviewed" in data:
         mj["reviewed"] = bool(data.get("reviewed", False))
 
     _save_meta_json(artikelnr, mj)
     _update_csv_row_fast(artikelnr)
-    return {"ok": True}
+
+    return {"ok": True, "artikelnr": artikelnr}
 
 
 @app.get("/api/describe")
