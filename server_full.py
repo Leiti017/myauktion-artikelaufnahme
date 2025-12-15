@@ -438,7 +438,7 @@ async def upload(
         img = img.convert("RGB")
 
         # SPEED: kleiner + schneller für Base64/Upload
-        img.thumbnail((1024, 1024))
+        img.thumbnail((768, 768))
     except Exception as e:
         return JSONResponse({"ok": False, "error": f"Ungültiges Bild: {e}"}, status_code=400)
 
@@ -446,7 +446,7 @@ async def upload(
     idx = int(existing[-1].stem.split("_")[-1]) + 1 if existing else 0
     out = RAW_DIR / f"{artikelnr}_{idx}.jpg"
     out.parent.mkdir(parents=True, exist_ok=True)
-    img.save(out, "JPEG", quality=78)
+    img.save(out, "JPEG", quality=72, optimize=True)
 
     # set pending, damit Polling NICHT bei altem realtime sofort stoppt
     mj = _load_meta_json(artikelnr)
