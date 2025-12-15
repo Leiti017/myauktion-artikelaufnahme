@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="de">
 <head>
-    <!-- build:20251215_161450 -->
+    <!-- build:20251215_174332 -->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
@@ -91,6 +91,64 @@
             <label class="block mb-1 text-xs opacity-80">Artikelnummer (mind. 6-stellig)</label>
             <input id="f-artikelnr" type="number" inputmode="numeric" class="input" autocomplete="off" placeholder="z.B. 810233">
             <div id="artnr-hint" class="text-[11px] text-white/80 mt-1"></div>
+        <!-- ⚙️ EINSTELLUNGEN (klappbar) -->
+        <div id="settings-panel" class="glass rounded-2xl p-3 mb-3 hidden">
+          <div class="text-[11px] text-white/80 mb-2">
+            Startwerte (werden gespeichert und bei jedem Artikel automatisch übernommen)
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label class="block mb-1 text-xs opacity-80">Einlieferer-ID</label>
+              <select id="s-einlieferer-id" class="input">
+                <option value="22" selected>22</option>
+                <option value="55">55</option>
+                <option value="66">66</option>
+                <option value="65461">65461</option>
+              </select>
+            </div>
+
+            <div>
+              <label class="block mb-1 text-xs opacity-80">Mitarbeiter</label>
+              <select id="s-mitarbeiter" class="input">
+                <option>Jan</option><option>Rene</option><option>Karin</option><option>Katharina</option>
+                <option>Linda</option><option>Jasmin</option><option>Natascha</option>
+              </select>
+            </div>
+
+            <div>
+              <label class="block mb-1 text-xs opacity-80">Menge</label>
+              <input id="s-menge" type="number" class="input" value="1" min="1">
+            </div>
+
+            <div>
+              <label class="block mb-1 text-xs opacity-80">Lagerstand</label>
+              <input id="s-lagerstand" type="number" class="input" value="1" min="1">
+            </div>
+
+            <div>
+              <label class="block mb-1 text-xs opacity-80">Übernehmen</label>
+              <input id="s-uebernehmen" type="number" class="input" value="1" min="0">
+            </div>
+
+            <div>
+              <label class="block mb-1 text-xs opacity-80">Angeliefert (Datum)</label>
+              <input id="s-angeliefert" type="date" class="input">
+            </div>
+
+            <div class="sm:col-span-2">
+              <label class="block mb-1 text-xs opacity-80">Betriebsmittel</label>
+              <input id="s-betriebsmittel" type="text" class="input" placeholder="Freitext…">
+            </div>
+          </div>
+
+          <div class="flex justify-end mt-3">
+            <button id="btn-settings-save" class="btn btn-primary text-xs">Speichern</button>
+          </div>
+        </div>
+
+        <div id="settings-mini" class="text-[11px] text-white/80 mb-3"></div>
+
           </div>
           <div>
             <label class="block mb-1 text-xs opacity-80">Lagerort</label>
@@ -211,6 +269,86 @@
   const logEl = document.getElementById('log');
   const toastWrap = document.getElementById('toast-wrap');
 
+  // ⚙️ Settings
+  const SETTINGS_KEY = "MYAUKTION_SETTINGS_V1";
+  const btnSettings = document.getElementById('btn-settings');
+  const settingsPanel = document.getElementById('settings-panel');
+  const settingsMini = document.getElementById('settings-mini');
+  const sEinl = document.getElementById('s-einlieferer-id');
+  const sMit  = document.getElementById('s-mitarbeiter');
+  const sMenge = document.getElementById('s-menge');
+  const sLagerstand = document.getElementById('s-lagerstand');
+  const sUebernehmen = document.getElementById('s-uebernehmen');
+  const sAngeliefert = document.getElementById('s-angeliefert');
+  const sBetriebsmittel = document.getElementById('s-betriebsmittel');
+  const btnSettingsSave = document.getElementById('btn-settings-save');
+
+  function loadSettings(){
+    try{
+      const raw = localStorage.getItem(SETTINGS_KEY);
+      const d = raw ? JSON.parse(raw) : {};
+      return Object.assign({
+        einlieferer_id: "22",
+        mitarbeiter: "Jan",
+        menge: 1,
+        lagerstand: 1,
+        uebernehmen: 1,
+        angeliefert: "",
+        betriebsmittel: "",
+        price_system_enabled: true
+      }, d || {});
+    }catch(e){
+      return {einlieferer_id:"22",mitarbeiter:"Jan",menge:1,lagerstand:1,uebernehmen:1,angeliefert:"",betriebsmittel:"",price_system_enabled:true};
+    }
+  }
+  function saveSettings(s){ try{ localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); }catch(e){} }
+  function settingsText(s){
+    const parts=[];
+    parts.push('Einl.: ' + (s.einlieferer_id||'-'));
+    parts.push('MA: ' + (s.mitarbeiter||'-'));
+    parts.push('Menge: ' + (s.menge ?? 1));
+    parts.push('LS: ' + (s.lagerstand ?? 1));
+    parts.push('ü: ' + (s.uebernehmen ?? 1));
+    if(s.angeliefert) parts.push('angel.: ' + s.angeliefert);
+    if(s.betriebsmittel) parts.push('BM: ' + s.betriebsmittel);
+    parts.push((s.price_system_enabled===false)?'Preis: AUS':'Preis: AN');
+    return parts.join(' · ');
+  }
+  function applySettingsToUI(){
+    const s=loadSettings();
+    if(sEinl) sEinl.value = s.einlieferer_id||'22';
+    if(sMit) sMit.value = s.mitarbeiter||'Jan';
+    if(sMenge) sMenge.value = String(s.menge ?? 1);
+    if(sLagerstand) sLagerstand.value = String(s.lagerstand ?? 1);
+    if(sUebernehmen) sUebernehmen.value = String(s.uebernehmen ?? 1);
+    if(sAngeliefert) sAngeliefert.value = s.angeliefert||'';
+    if(sBetriebsmittel) sBetriebsmittel.value = s.betriebsmittel||'';
+    if(settingsMini) settingsMini.textContent = 'Einstellungen: ' + settingsText(s);
+  }
+  function readSettingsFromUI(){
+    return {
+      einlieferer_id: (sEinl?.value||'').trim(),
+      mitarbeiter: (sMit?.value||'').trim(),
+      menge: parseInt(sMenge?.value||'1',10)||1,
+      lagerstand: parseInt(sLagerstand?.value||'1',10)||1,
+      uebernehmen: parseInt(sUebernehmen?.value||'1',10)||1,
+      angeliefert: (sAngeliefert?.value||'').trim(),
+      betriebsmittel: (sBetriebsmittel?.value||'').trim(),
+      price_system_enabled: (loadSettings().price_system_enabled !== false)
+    };
+  }
+  function toggleSettings(){
+    const open = settingsPanel.classList.contains('hidden');
+    if(open){ settingsPanel.classList.remove('hidden'); btnSettings.textContent='⬆️ Einstellungen'; }
+    else { settingsPanel.classList.add('hidden'); btnSettings.textContent='⚙️ Einstellungen'; }
+  }
+  function applyPriceMode(){
+    const s=loadSettings();
+    const enabled = (s.price_system_enabled !== false);
+    if(btnPriceToggle) btnPriceToggle.textContent = enabled ? 'Preis-System ausschalten' : 'Preis-System einschalten';
+    if(!enabled){ fRetail.value=''; fRuf.value='1'; }
+  }
+
   function log(msg){
     const t = new Date().toLocaleTimeString();
     const d = document.createElement('div');
@@ -237,6 +375,7 @@
 
   async function refreshImages(){
     const art = (fArt.value||"").trim();
+    const s = loadSettings();
     if(!art) return;
     const res = await fetch('/api/images?artikelnr=' + encodeURIComponent(art));
     const j = await res.json();
@@ -251,6 +390,7 @@
 
   async function refreshMeta(){
     const art = (fArt.value||"").trim();
+    const s = loadSettings();
     if(!art) return;
     const res = await fetch('/api/meta?artikelnr=' + encodeURIComponent(art));
     const j = await res.json();
@@ -260,7 +400,6 @@
     fDesc.value  = j.beschreibung || "";
     fRetail.value = (j.retail_price ?? "");
     fRuf.value    = (j.rufpreis ?? "");
-    applyPriceMode();
 
     if(j.image){
       thumb.innerHTML = `<img src="${j.image}">`;
@@ -281,7 +420,6 @@
           fDesc.value  = j.beschreibung || "";
           fRetail.value = (j.retail_price ?? "");
           fRuf.value    = (j.rufpreis ?? "");
-          applyPriceMode();
           setPill(false);
           statusText.textContent = "KI-Vorschlag übernommen.";
           toast("KI fertig");
@@ -325,20 +463,11 @@
     if(!validArtNr()) return alert('Artikelnummer muss mindestens 6-stellig sein.');
     const art = (fArt.value||'').trim();
     if(!confirm('Letztes Foto wirklich löschen?')) return;
-    const res = await fetch('/api/delete_last_image', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({artikelnr: art})
-    });
+    const res = await fetch('/api/delete_last_image', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({artikelnr: art})});
     const j = await res.json();
-    if(!res.ok || !j.ok){
-      alert('Löschen Fehler: ' + (j.error || res.status));
-      return;
-    }
-    toast('Foto gelöscht');
-    log('Foto gelöscht: ' + (j.deleted || '-'));
-    await refreshImages();
-    await refreshMeta();
+    if(!res.ok || !j.ok){ alert('Löschen Fehler: ' + (j.error || res.status)); return; }
+    toast('Foto gelöscht'); log('Foto gelöscht: ' + (j.deleted || '-'));
+    await refreshImages(); await refreshMeta();
   });
 
   fFile.addEventListener('change', async ()=>{
@@ -348,6 +477,7 @@
       return;
     }
     const art = (fArt.value||"").trim();
+    const s = loadSettings();
     const file = fFile.files[0];
     if(!file) return;
 
@@ -380,6 +510,7 @@
   btnDescribe.onclick = async ()=>{
     if(!validArtNr()) return alert("Artikelnummer muss mindestens 6-stellig sein.");
     const art = (fArt.value||"").trim();
+    const s = loadSettings();
     setPill(true, "Manuelle KI …");
     const res = await fetch('/api/describe?artikelnr=' + encodeURIComponent(art));
     const j = await res.json();
@@ -392,7 +523,6 @@
     fDesc.value = j.description || "";
     fRetail.value = (j.retail_price ?? "");
     fRuf.value = (j.rufpreis ?? "");
-    applyPriceMode();
     setPill(false);
     toast("KI übernommen");
   };
@@ -400,10 +530,21 @@
   btnSave.onclick = async ()=>{
     if(!validArtNr()) return alert("Artikelnummer muss mindestens 6-stellig sein.");
     const art = (fArt.value||"").trim();
+    const s = loadSettings();
 
     const payload = {
       artikelnr: art,
       lagerort: (fLager.value||"").trim(),
+
+      // Startwerte aus Einstellungen
+      mitarbeiter: s.mitarbeiter,
+      menge: s.menge,
+      lagerstand: s.lagerstand,
+      uebernehmen: s.uebernehmen,
+      einlieferer_id: s.einlieferer_id,
+      angeliefert: s.angeliefert,
+      betriebsmittel: s.betriebsmittel,
+      einlieferer: s.einlieferer_id,
       einlieferer: fEinl.value,
       mitarbeiter: fMit.value,
       titel: (fTitle.value||"").trim(),
