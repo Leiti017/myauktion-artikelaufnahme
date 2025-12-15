@@ -741,4 +741,18 @@ def admin_articles(request: Request, category: str = "", only_failed: int = 0):
     items.sort(key=_sort_key)
     return {"ok": True, "items": items}
 
-# build:20251215_161450
+if __name__ == "__main__":
+    import os
+    import uvicorn
+
+    # Render setzt den Port automatisch
+    port = int(os.environ.get("PORT", "10000"))
+
+    print(f"[START] Server läuft auf Port {port}")
+
+    uvicorn.run(
+        "server_full:app",
+        host="0.0.0.0",
+        port=port,
+        log_level="info"
+    )
