@@ -15,7 +15,7 @@
 # Start:
 #   python -m uvicorn server_full:app --host 0.0.0.0 --port 5050
 from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, Request, Response
-from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -34,7 +34,7 @@ def _normalize_title(title: str) -> str:
 
 from pathlib import Path
 from PIL import Image, ImageOps
-import io, json, time, csv, math, os, zipfile
+import io, json, time, csv, math, os
 import re
 from typing import Any, Dict, Optional, Tuple
 
@@ -207,7 +207,7 @@ CSV_FIELDS = [
 ]
 
 
-def _rebuild_csv_export() -> None:
+def _update_csv_row_fast(artikelnr) -> None:
     rows = []
     for meta_file in RAW_DIR.glob("*.json"):
         try:
@@ -245,6 +245,74 @@ def _rebuild_csv_export() -> None:
             w.writerow(r)
 
     print("[CSV] Export aktualisiert:", EXPORT_CSV)
+
+
+def _csv_row_from_meta(d: Dict[str, Any], fallback_nr: str) -> Dict[str, Any]:
+    """Build one CSV row from a single meta json."""
+    nr = str(d.get("artikelnr") or fallback_nr)
+    return {
+        "ArtikelNr": nr,
+        # Defaults/Settings-driven fields (already stored in meta by frontend)
+        "Menge": d.get("menge", 1) or 1,
+        "Kategorie": d.get("kategorie", "") or "",
+        "Bezeichnung": d.get("titel", "") or "",
+        "Beschreibung": d.get("beschreibung", "") or "",
+        "Rufpreis": d.get("rufpreis", 0.0) or 0.0,
+        "Preis": d.get("preis", "") or "",
+        "Lagerort": d.get("lagerort", "") or "",
+        "Lagerstand": d.get("lagerstand", 1) or 1,
+        "uebernehmen": d.get("uebernehmen", 1) or 1,
+        "Einlieferer-ID": d.get("einlieferer_id", d.get("einlieferer", "")) or "",
+        "angeliefert": d.get("angeliefert", "") or "",
+        "Betriebsmittel": d.get("betriebsmittel", "") or "",
+        "RetailPreis": d.get("retail_price", "") or "",
+    }
+
+def _update_csv_row_fast(artikelnr: str) -> None:
+    """Update only one row in artikel_export.csv instead of rebuilding from all *.json.
+
+    This makes 'Speichern' much faster when many articles exist.
+    """
+    d = _load_meta_json(artikelnr) or {}
+    row_new = _csv_row_from_meta(d, artikelnr)
+
+    rows: List[Dict[str, Any]] = []
+    found = False
+
+    if EXPORT_CSV.exists():
+        try:
+            with EXPORT_CSV.open("r", encoding="utf-8") as f:
+                r = csv.DictReader(f, delimiter=";")
+                for row in r:
+                    if str(row.get("ArtikelNr", "")).strip() == str(artikelnr).strip():
+                        rows.append(row_new)
+                        found = True
+                    else:
+                        # normalize to our fields (keep unknown out)
+                        rows.append({k: row.get(k, "") for k in CSV_FIELDS})
+        except Exception:
+            # fallback if csv is corrupted
+            rows = []
+            found = False
+
+    if not found:
+        rows.append(row_new)
+
+    def _sort_key(r):
+        try:
+            return int(str(r.get("ArtikelNr", "")).strip())
+        except Exception:
+            return str(r.get("ArtikelNr", ""))
+
+    rows.sort(key=_sort_key)
+
+    with EXPORT_CSV.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=CSV_FIELDS, delimiter=";")
+        w.writeheader()
+        for r in rows:
+            w.writerow({k: r.get(k, "") for k in CSV_FIELDS})
+
+    print("[CSV] Row updated:", artikelnr, "->", EXPORT_CSV)
 
 
 # ----------------------------
@@ -329,7 +397,7 @@ def _run_meta_background(artikelnr: str, img_path: Path) -> None:
         _save_meta_json(artikelnr, mj)
         _usage_fail(mj["ki_last_error"])
 
-    _rebuild_csv_export()
+    _update_csv_row_fast(artikelnr)
     print(f"[BG-KI] Fertig für Artikel {artikelnr} – ki_ok={ok}")
 
 
@@ -351,90 +419,12 @@ def health():
     return {"ok": True}
 
 
-
-@app.post("/api/delete_last_image")
-def delete_last_image(data: Dict[str, Any]):
-    """Löscht das zuletzt hochgeladene Bild für eine Artikelnummer (für die Hauptmaske)."""
-    artikelnr = str(data.get("artikelnr", "")).strip()
-    if not artikelnr:
-        return JSONResponse({"ok": False, "error": "Artikelnummer fehlt"}, status_code=400)
-
-    pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
-    if not pics:
-        return {"ok": True, "deleted": None}
-
-    last = pics[-1]
-    try:
-        last.unlink()
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": f"Delete failed: {e}"}, status_code=500)
-
-    # update meta image to previous
-    mj = _load_meta_json(artikelnr)
-    pics2 = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
-    img_url = ""
-    if pics2:
-        try:
-            rel = pics2[-1].relative_to(BASE_DIR)
-            img_url = "/static/" + str(rel).replace("\\", "/")
-        except Exception:
-            img_url = ""
-    mj["image"] = img_url
-    _save_meta_json(artikelnr, mj)
-    _rebuild_csv_export()
-    return {"ok": True, "deleted": last.name}
-
 @app.get("/api/export.csv")
 def export_csv():
     if not EXPORT_CSV.exists():
-        _rebuild_csv_export()
+        _update_csv_row_fast(artikelnr)
     return FileResponse(str(EXPORT_CSV), filename="artikel_export.csv", media_type="text/csv")
 
-
-@app.get("/api/admin/images.zip")
-def admin_images_zip(request: Request, category: str = "", only_failed: int = 0):
-    guard = _admin_guard(request)
-    if guard:
-        return guard
-
-    # Artikelliste nach Filtern zusammenstellen
-    art_nrs = []
-    for p in RAW_DIR.glob("*.json"):
-        try:
-            mj = json.loads(p.read_text("utf-8"))
-        except Exception:
-            continue
-
-        nr = str(mj.get("artikelnr", p.stem))
-        cat = (mj.get("kategorie", "") or "").strip()
-
-        if category and cat.lower() != category.strip().lower():
-            continue
-        if only_failed and (mj.get("ki_source") != "failed"):
-            continue
-
-        art_nrs.append(nr)
-
-    def _iter_zip():
-        buf = io.BytesIO()
-        with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as z:
-            for nr in sorted(art_nrs, key=lambda x: int(x) if str(x).isdigit() else str(x)):
-                pics = sorted(RAW_DIR.glob(f"{nr}_*.jpg"))
-                for pic in pics:
-                    # Im ZIP in einen Ordner pro Artikel, damit Dateinamen nicht kollidieren
-                    arcname = f"{nr}/{pic.name}"
-                    try:
-                        z.write(pic, arcname=arcname)
-                    except Exception:
-                        # einzelne Dateien überspringen, ZIP trotzdem liefern
-                        continue
-
-        buf.seek(0)
-        yield from iter(lambda: buf.read(1024 * 256), b"")
-
-    filename = "myauktion_fotos.zip"
-    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
-    return StreamingResponse(_iter_zip(), media_type="application/zip", headers=headers)
 
 @app.get("/api/next_artikelnr")
 def next_artikelnr():
@@ -471,7 +461,7 @@ async def upload(
         img = img.convert("RGB")
 
         # SPEED: kleiner + schneller für Base64/Upload
-        img.thumbnail((768, 768))
+        img.thumbnail((1024, 1024))
     except Exception as e:
         return JSONResponse({"ok": False, "error": f"Ungültiges Bild: {e}"}, status_code=400)
 
@@ -479,7 +469,7 @@ async def upload(
     idx = int(existing[-1].stem.split("_")[-1]) + 1 if existing else 0
     out = RAW_DIR / f"{artikelnr}_{idx}.jpg"
     out.parent.mkdir(parents=True, exist_ok=True)
-    img.save(out, "JPEG", quality=72, optimize=True)
+    img.save(out, "JPEG", quality=78)
 
     # set pending, damit Polling NICHT bei altem realtime sofort stoppt
     mj = _load_meta_json(artikelnr)
@@ -489,7 +479,7 @@ async def upload(
     mj["batch_done"] = False
     _save_meta_json(artikelnr, mj)
 
-    _rebuild_csv_export()
+    _update_csv_row_fast(artikelnr)
 
     if background_tasks:
         background_tasks.add_task(_run_meta_background, artikelnr, out)
@@ -533,7 +523,7 @@ def delete_image(payload: Dict[str, Any]):
     mj["last_image"] = pics[-1].name if pics else ""
     _save_meta_json(artikelnr, mj)
 
-    _rebuild_csv_export()
+    _update_csv_row_fast(artikelnr)
     return {"ok": True}
 
 
@@ -580,28 +570,8 @@ def save(data: Dict[str, Any]):
     if "reviewed" in data:
         mj["reviewed"] = bool(data.get("reviewed", False))
 
-    
-
-    # Preis-System / manuelle Preise
-    def _to_float(v, default=0.0):
-        try:
-            if v is None or str(v).strip() == "":
-                return float(default)
-            return float(v)
-        except Exception:
-            return float(default)
-
-    if "price_system_enabled" in data:
-        mj["price_system_enabled"] = bool(data.get("price_system_enabled", True))
-
-    if "retail_price" in data:
-        rp = data.get("retail_price")
-        mj["retail_price"] = "" if (rp is None or str(rp).strip() == "") else _to_float(rp, 0.0)
-
-    if "rufpreis" in data:
-        mj["rufpreis"] = _to_float(data.get("rufpreis"), 0.0)
     _save_meta_json(artikelnr, mj)
-    _rebuild_csv_export()
+    _update_csv_row_fast(artikelnr)
     return {"ok": True}
 
 
@@ -636,7 +606,7 @@ def describe(artikelnr: str):
         mj["reviewed"] = False
         _save_meta_json(artikelnr, mj)
         _usage_success()
-        _rebuild_csv_export()
+        _update_csv_row_fast(artikelnr)
         return {
             "ok": True,
             "title": mj["titel"],
@@ -651,7 +621,7 @@ def describe(artikelnr: str):
     mj["ki_last_error"] = err or "ki_failed"
     _save_meta_json(artikelnr, mj)
     _usage_fail(mj["ki_last_error"])
-    _rebuild_csv_export()
+    _update_csv_row_fast(artikelnr)
     return JSONResponse({"ok": False, "error": mj["ki_last_error"]}, status_code=502)
 
 
@@ -705,16 +675,9 @@ def admin_articles(request: Request, category: str = "", only_failed: int = 0):
 
         pics = sorted(RAW_DIR.glob(f"{nr}_*.jpg"))
         img_url = ""
-        images = []
         if pics:
-            rel_last = pics[-1].relative_to(BASE_DIR)
-            img_url = "/static/" + str(rel_last).replace("\\", "/")
-            for pic in pics:
-                rel = pic.relative_to(BASE_DIR)
-                images.append({
-                    "filename": pic.name,
-                    "url": "/static/" + str(rel).replace("\\", "/"),
-                })
+            rel = pics[-1].relative_to(BASE_DIR)
+            img_url = "/static/" + str(rel).replace("\\", "/")
 
         items.append({
             "artikelnr": nr,
@@ -728,8 +691,6 @@ def admin_articles(request: Request, category: str = "", only_failed: int = 0):
             "ki_last_error": mj.get("ki_last_error", "") or "",
             "last_image": mj.get("last_image", "") or "",
             "image": img_url,
-            "images": images,
-            "image_count": len(images),
         })
 
     def _sort_key(x):
@@ -740,19 +701,3 @@ def admin_articles(request: Request, category: str = "", only_failed: int = 0):
 
     items.sort(key=_sort_key)
     return {"ok": True, "items": items}
-
-if __name__ == "__main__":
-    import os
-    import uvicorn
-
-    # Render setzt den Port automatisch
-    port = int(os.environ.get("PORT", "10000"))
-
-    print(f"[START] Server läuft auf Port {port}")
-
-    uvicorn.run(
-        "server_full:app",
-        host="0.0.0.0",
-        port=port,
-        log_level="info"
-    )
