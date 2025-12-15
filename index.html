@@ -1,22 +1,10 @@
 <!doctype html>
 <html lang="de">
 <head>
-    <!-- build:20251215_174332 -->
-    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-    <meta http-equiv="Pragma" content="no-cache">
-    <meta http-equiv="Expires" content="0">
-
+  <!-- build:LIVE_SETTINGS_PRICE_VISUAL -->
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>MyAuktion · Artikelaufnahme</title>
-
-  <link rel="icon" type="image/x-icon" href="/static/my_icon.ico">
-  <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png?v=20251215_062635">
-  <link rel="manifest" href="/static/site.webmanifest?v=20251215_062635">
-  <meta name="theme-color" content="#1d4ed8">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-title" content="MyAuktion">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 
   <script defer src="https://unpkg.com/lucide@latest"></script>
   <script src="https://cdn.tailwindcss.com"></script>
@@ -40,7 +28,7 @@
     }
     textarea{
       width:100%;min-height:140px;padding:.6rem .9rem;border-radius:.75rem;
-      background:rgba(255,255,255,.96)!important;color:#0f172a!important; /* schwarz auf weiß */
+      background:rgba(255,255,255,.96)!important;color:#0f172a!important;
       outline:none;border:1px solid transparent;font-size:.9rem;resize:vertical
     }
     .thumb{
@@ -55,8 +43,8 @@
     .toast-wrap{position:fixed;top:12px;right:12px;z-index:50;display:flex;flex-direction:column;gap:8px}
     .toast{background:#fff;color:#0f172a;border-radius:999px;padding:7px 12px;font-weight:700;box-shadow:0 10px 30px rgba(0,0,0,.18);opacity:0;transform:translateY(-6px) scale(.94);transition:.18s}
     .toast.show{opacity:1;transform:translateY(0) scale(1)}
+    .price-off{border:2px solid rgba(239,68,68,.9)!important;background:rgba(254,242,242,.95)!important}
   </style>
-  <noscript><style>body{background:#0f172a;color:#fff;padding:20px;font-family:system-ui}</style>Bitte JavaScript aktivieren.</noscript>
 </head>
 
 <body class="text-white">
@@ -66,7 +54,7 @@
   <header class="flex items-center justify-between gap-4 mb-6">
     <div class="flex items-center gap-3">
       <div class="w-11 h-11 rounded-full bg-white shadow-lg flex items-center justify-center overflow-hidden">
-        <img src="/static/myauktion_logo.png" alt="MyAuktion" class="max-w-[34px] max-h-[34px]">
+        <span class="text-slate-900 font-black">MG</span>
       </div>
       <div>
         <div class="text-xl md:text-2xl font-bold tracking-tight flex items-center gap-2">
@@ -75,8 +63,6 @@
         <div class="text-xs md:text-sm text-white/80">BEI UNS BESTIMMST DU DEN PREIS!</div>
       </div>
     </div>
-
-    <!-- ✅ Admin-Link -->
     <a href="/admin" class="underline text-sm opacity-90">Admin</a>
   </header>
 
@@ -84,14 +70,12 @@
     <div class="grid md:grid-cols-2 gap-5">
       <!-- LINKS -->
       <section>
-        <h2 class="text-lg font-semibold mb-2">1. Artikel erfassen</h2>
+        <div class="flex items-center justify-between mb-2">
+          <h2 class="text-lg font-semibold">1. Artikel erfassen</h2>
+          <button id="btn-settings" class="btn btn-ghost text-xs">⚙️ Einstellungen</button>
+        </div>
 
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
-          <div>
-            <label class="block mb-1 text-xs opacity-80">Artikelnummer (mind. 6-stellig)</label>
-            <input id="f-artikelnr" type="number" inputmode="numeric" class="input" autocomplete="off" placeholder="z.B. 810233">
-            <div id="artnr-hint" class="text-[11px] text-white/80 mt-1"></div>
-        <!-- ⚙️ EINSTELLUNGEN (klappbar) -->
+        <!-- ⚙️ EINSTELLUNGEN -->
         <div id="settings-panel" class="glass rounded-2xl p-3 mb-3 hidden">
           <div class="text-[11px] text-white/80 mb-2">
             Startwerte (werden gespeichert und bei jedem Artikel automatisch übernommen)
@@ -149,29 +133,16 @@
 
         <div id="settings-mini" class="text-[11px] text-white/80 mb-3"></div>
 
+        <!-- HAUPTMASKE -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+          <div>
+            <label class="block mb-1 text-xs opacity-80">Artikelnummer (mind. 6-stellig)</label>
+            <input id="f-artikelnr" type="number" inputmode="numeric" class="input" autocomplete="off" placeholder="z.B. 810233">
+            <div id="artnr-hint" class="text-[11px] text-white/80 mt-1"></div>
           </div>
           <div>
             <label class="block mb-1 text-xs opacity-80">Lagerort</label>
             <input id="f-lagerort" type="text" class="input" placeholder="z.B. (22) Haushalt/Freizeit 170">
-          </div>
-        </div>
-
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
-          <div>
-            <label class="block mb-1 text-xs opacity-80">Einlieferer-ID</label>
-            <select id="f-einlieferer" class="input">
-              <option value="22" selected>22</option>
-              <option value="55">55</option>
-              <option value="66">66</option>
-              <option value="65461">65461</option>
-            </select>
-          </div>
-          <div>
-            <label class="block mb-1 text-xs opacity-80">Mitarbeiter</label>
-            <select id="f-mitarbeiter" class="input">
-              <option>Jan</option><option>Rene</option><option>Karin</option><option>Katharina</option>
-              <option>Linda</option><option>Jasmin</option><option>Natascha</option>
-            </select>
           </div>
         </div>
 
@@ -187,9 +158,11 @@
           <button id="btn-photo" class="btn btn-primary text-sm">
             <i data-lucide="camera" class="w-4 h-4"></i> Foto auswählen
           </button>
+
           <button id="btn-delete-photo" class="btn btn-ghost text-sm">
             <i data-lucide="trash-2" class="w-4 h-4"></i> Foto löschen
           </button>
+
           <button id="btn-save" class="btn btn-ghost text-sm">
             <i data-lucide="save" class="w-4 h-4"></i> Artikel speichern
           </button>
@@ -218,23 +191,24 @@
           <textarea id="f-desc"></textarea>
         </div>
 
-        <!-- ✅ PREISE -->
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
           <div>
             <div class="flex items-center justify-between mb-1">
-  <label class="block text-xs opacity-80">Listenpreis (€)</label>
-  <button id="btn-price-toggle" class="btn btn-ghost text-[11px]" type="button">Preis-System ausschalten</button>
-</div>
+              <label class="block text-xs opacity-80">Listenpreis (€)</label>
+              <button id="btn-price-toggle" class="btn btn-ghost text-[11px]" type="button">Preis-System ausschalten</button>
+            </div>
             <input id="f-retail" type="number" class="input">
           </div>
           <div>
-            <label class="block mb-1 text-xs opacity-80">Rufpreis (20%, aufgerundet)</label>
+            <label class="block mb-1 text-xs opacity-80">Rufpreis</label>
             <input id="f-ruf" type="number" class="input">
           </div>
         </div>
 
         <label class="block mb-1 text-xs opacity-80">System-Log</label>
         <div id="log" class="text-[11px] text-slate-900 bg-white/90 rounded-xl p-2 max-h-40 overflow-y-auto"></div>
+
+        <div class="text-[10px] text-white/70 mt-3">build: LIVE_SETTINGS_PRICE_VISUAL</div>
       </section>
     </div>
   </main>
@@ -244,8 +218,6 @@
   const fArt = document.getElementById('f-artikelnr');
   const artHint = document.getElementById('artnr-hint');
   const fLager = document.getElementById('f-lagerort');
-  const fEinl = document.getElementById('f-einlieferer');
-  const fMit = document.getElementById('f-mitarbeiter');
 
   const fFile = document.getElementById('f-file');
   const thumb = document.getElementById('thumb');
@@ -258,9 +230,9 @@
 
   const btnPhoto = document.getElementById('btn-photo');
   const btnDeletePhoto = document.getElementById('btn-delete-photo');
-  const btnPriceToggle = document.getElementById('btn-price-toggle');
   const btnSave = document.getElementById('btn-save');
   const btnDescribe = document.getElementById('btn-describe');
+  const btnPriceToggle = document.getElementById('btn-price-toggle');
 
   const statusText = document.getElementById('status-text');
   const statusPill = document.getElementById('status-pill');
@@ -274,6 +246,7 @@
   const btnSettings = document.getElementById('btn-settings');
   const settingsPanel = document.getElementById('settings-panel');
   const settingsMini = document.getElementById('settings-mini');
+
   const sEinl = document.getElementById('s-einlieferer-id');
   const sMit  = document.getElementById('s-mitarbeiter');
   const sMenge = document.getElementById('s-menge');
@@ -302,51 +275,67 @@
     }
   }
   function saveSettings(s){ try{ localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); }catch(e){} }
+
   function settingsText(s){
     const parts=[];
-    parts.push('Einl.: ' + (s.einlieferer_id||'-'));
-    parts.push('MA: ' + (s.mitarbeiter||'-'));
-    parts.push('Menge: ' + (s.menge ?? 1));
-    parts.push('LS: ' + (s.lagerstand ?? 1));
-    parts.push('ü: ' + (s.uebernehmen ?? 1));
-    if(s.angeliefert) parts.push('angel.: ' + s.angeliefert);
-    if(s.betriebsmittel) parts.push('BM: ' + s.betriebsmittel);
-    parts.push((s.price_system_enabled===false)?'Preis: AUS':'Preis: AN');
-    return parts.join(' · ');
+    parts.push("Einl.: " + (s.einlieferer_id||"-"));
+    parts.push("MA: " + (s.mitarbeiter||"-"));
+    parts.push("Menge: " + (s.menge ?? 1));
+    parts.push("LS: " + (s.lagerstand ?? 1));
+    parts.push("ü: " + (s.uebernehmen ?? 1));
+    if(s.angeliefert) parts.push("angel.: " + s.angeliefert);
+    if(s.betriebsmittel) parts.push("BM: " + s.betriebsmittel);
+    parts.push((s.price_system_enabled===false) ? "Preis: AUS" : "Preis: AN");
+    return parts.join(" · ");
   }
+
   function applySettingsToUI(){
-    const s=loadSettings();
-    if(sEinl) sEinl.value = s.einlieferer_id||'22';
-    if(sMit) sMit.value = s.mitarbeiter||'Jan';
-    if(sMenge) sMenge.value = String(s.menge ?? 1);
-    if(sLagerstand) sLagerstand.value = String(s.lagerstand ?? 1);
-    if(sUebernehmen) sUebernehmen.value = String(s.uebernehmen ?? 1);
-    if(sAngeliefert) sAngeliefert.value = s.angeliefert||'';
-    if(sBetriebsmittel) sBetriebsmittel.value = s.betriebsmittel||'';
-    if(settingsMini) settingsMini.textContent = 'Einstellungen: ' + settingsText(s);
+    const s = loadSettings();
+    sEinl.value = s.einlieferer_id || "22";
+    sMit.value = s.mitarbeiter || "Jan";
+    sMenge.value = String(s.menge ?? 1);
+    sLagerstand.value = String(s.lagerstand ?? 1);
+    sUebernehmen.value = String(s.uebernehmen ?? 1);
+    sAngeliefert.value = s.angeliefert || "";
+    sBetriebsmittel.value = s.betriebsmittel || "";
+    settingsMini.textContent = "Einstellungen: " + settingsText(s);
   }
+
   function readSettingsFromUI(){
+    const prev = loadSettings();
     return {
-      einlieferer_id: (sEinl?.value||'').trim(),
-      mitarbeiter: (sMit?.value||'').trim(),
-      menge: parseInt(sMenge?.value||'1',10)||1,
-      lagerstand: parseInt(sLagerstand?.value||'1',10)||1,
-      uebernehmen: parseInt(sUebernehmen?.value||'1',10)||1,
-      angeliefert: (sAngeliefert?.value||'').trim(),
-      betriebsmittel: (sBetriebsmittel?.value||'').trim(),
-      price_system_enabled: (loadSettings().price_system_enabled !== false)
+      einlieferer_id: (sEinl.value||"").trim(),
+      mitarbeiter: (sMit.value||"").trim(),
+      menge: parseInt(sMenge.value||"1",10) || 1,
+      lagerstand: parseInt(sLagerstand.value||"1",10) || 1,
+      uebernehmen: parseInt(sUebernehmen.value||"1",10) || 1,
+      angeliefert: (sAngeliefert.value||"").trim(),
+      betriebsmittel: (sBetriebsmittel.value||"").trim(),
+      price_system_enabled: (prev.price_system_enabled !== false)
     };
   }
+
   function toggleSettings(){
     const open = settingsPanel.classList.contains('hidden');
     if(open){ settingsPanel.classList.remove('hidden'); btnSettings.textContent='⬆️ Einstellungen'; }
     else { settingsPanel.classList.add('hidden'); btnSettings.textContent='⚙️ Einstellungen'; }
   }
+
   function applyPriceMode(){
-    const s=loadSettings();
+    const s = loadSettings();
     const enabled = (s.price_system_enabled !== false);
-    if(btnPriceToggle) btnPriceToggle.textContent = enabled ? 'Preis-System ausschalten' : 'Preis-System einschalten';
-    if(!enabled){ fRetail.value=''; fRuf.value='1'; }
+    if(btnPriceToggle){
+      btnPriceToggle.textContent = enabled ? "Preis-System ausschalten" : "Preis-System einschalten";
+    }
+    if(!enabled){
+      fRetail.value = "";
+      fRuf.value = "1";
+      fRetail.classList.add("price-off");
+      fRuf.classList.add("price-off");
+    }else{
+      fRetail.classList.remove("price-off");
+      fRuf.classList.remove("price-off");
+    }
   }
 
   function log(msg){
@@ -375,7 +364,6 @@
 
   async function refreshImages(){
     const art = (fArt.value||"").trim();
-    const s = loadSettings();
     if(!art) return;
     const res = await fetch('/api/images?artikelnr=' + encodeURIComponent(art));
     const j = await res.json();
@@ -390,7 +378,6 @@
 
   async function refreshMeta(){
     const art = (fArt.value||"").trim();
-    const s = loadSettings();
     if(!art) return;
     const res = await fetch('/api/meta?artikelnr=' + encodeURIComponent(art));
     const j = await res.json();
@@ -400,6 +387,7 @@
     fDesc.value  = j.beschreibung || "";
     fRetail.value = (j.retail_price ?? "");
     fRuf.value    = (j.rufpreis ?? "");
+    applyPriceMode();
 
     if(j.image){
       thumb.innerHTML = `<img src="${j.image}">`;
@@ -420,14 +408,10 @@
           fDesc.value  = j.beschreibung || "";
           fRetail.value = (j.retail_price ?? "");
           fRuf.value    = (j.rufpreis ?? "");
+          applyPriceMode();
           setPill(false);
           statusText.textContent = "KI-Vorschlag übernommen.";
           toast("KI fertig");
-          return;
-        }
-        if(j.ki_source === 'failed'){
-          setPill(false);
-          statusText.textContent = "KI fehlgeschlagen – bitte manuell ergänzen.";
           return;
         }
       }
@@ -459,16 +443,24 @@
     await refreshMeta();
   });
 
-  btnDeletePhoto && (btnDeletePhoto.onclick = async ()=>{
-    if(!validArtNr()) return alert('Artikelnummer muss mindestens 6-stellig sein.');
-    const art = (fArt.value||'').trim();
-    if(!confirm('Letztes Foto wirklich löschen?')) return;
-    const res = await fetch('/api/delete_last_image', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({artikelnr: art})});
+  btnDeletePhoto.onclick = async ()=>{
+    if(!validArtNr()) return alert("Artikelnummer muss mindestens 6-stellig sein.");
+    const art = (fArt.value||"").trim();
+    if(!confirm("Letztes Foto wirklich löschen?")) return;
+    const res = await fetch('/api/delete_last_image', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({artikelnr: art})
+    });
     const j = await res.json();
-    if(!res.ok || !j.ok){ alert('Löschen Fehler: ' + (j.error || res.status)); return; }
-    toast('Foto gelöscht'); log('Foto gelöscht: ' + (j.deleted || '-'));
-    await refreshImages(); await refreshMeta();
-  });
+    if(!res.ok || !j.ok){
+      alert("Löschen Fehler: " + (j.error || res.status));
+      return;
+    }
+    toast("Foto gelöscht");
+    await refreshImages();
+    await refreshMeta();
+  };
 
   fFile.addEventListener('change', async ()=>{
     if(!validArtNr()){
@@ -477,11 +469,9 @@
       return;
     }
     const art = (fArt.value||"").trim();
-    const s = loadSettings();
     const file = fFile.files[0];
     if(!file) return;
 
-    // lokale Vorschau sofort
     const reader = new FileReader();
     reader.onload = (ev)=> thumb.innerHTML = `<img src="${ev.target.result}">`;
     reader.readAsDataURL(file);
@@ -510,7 +500,6 @@
   btnDescribe.onclick = async ()=>{
     if(!validArtNr()) return alert("Artikelnummer muss mindestens 6-stellig sein.");
     const art = (fArt.value||"").trim();
-    const s = loadSettings();
     setPill(true, "Manuelle KI …");
     const res = await fetch('/api/describe?artikelnr=' + encodeURIComponent(art));
     const j = await res.json();
@@ -523,6 +512,7 @@
     fDesc.value = j.description || "";
     fRetail.value = (j.retail_price ?? "");
     fRuf.value = (j.rufpreis ?? "");
+    applyPriceMode();
     setPill(false);
     toast("KI übernommen");
   };
@@ -536,7 +526,6 @@
       artikelnr: art,
       lagerort: (fLager.value||"").trim(),
 
-      // Startwerte aus Einstellungen
       mitarbeiter: s.mitarbeiter,
       menge: s.menge,
       lagerstand: s.lagerstand,
@@ -545,8 +534,11 @@
       angeliefert: s.angeliefert,
       betriebsmittel: s.betriebsmittel,
       einlieferer: s.einlieferer_id,
-      einlieferer: fEinl.value,
-      mitarbeiter: fMit.value,
+
+      price_system_enabled: (s.price_system_enabled !== false),
+      retail_price: (s.price_system_enabled === false) ? "" : (fRetail.value||""),
+      rufpreis: (s.price_system_enabled === false) ? 1 : (fRuf.value||0),
+
       titel: (fTitle.value||"").trim(),
       beschreibung: (fDesc.value||"").trim(),
       reviewed: false
@@ -564,21 +556,39 @@
     }
     toast("Gespeichert");
     log("Gespeichert: " + art);
-    // nächste Nummer
-    try{
-      const n = parseInt(art,10);
-      if(Number.isFinite(n)) fArt.value = String(n+1);
-      updateArtnrHint();
-      fTitle.value=""; fDesc.value=""; fRetail.value=""; fRuf.value="";
-      imgStrip.innerHTML="";
-      thumb.innerHTML='<span class="text-xs text-white/70 text-center">Tippen, um Foto aufzunehmen / auszuwählen</span>';
-      statusText.textContent="Bereit für nächsten Artikel.";
-    }catch(e){}
   };
 
   window.addEventListener('DOMContentLoaded', ()=>{
     if(window.lucide) lucide.createIcons();
-    updateArtnrHint();
+
+    applySettingsToUI();
+    applyPriceMode();
+
+    btnSettings.onclick = toggleSettings;
+
+    btnSettingsSave.onclick = ()=>{
+      const ns = readSettingsFromUI();
+      saveSettings(ns);
+      applySettingsToUI();
+      settingsPanel.classList.add('hidden');
+      btnSettings.textContent = "⚙️ Einstellungen";
+      toast("Einstellungen gespeichert");
+    };
+
+    btnPriceToggle.onclick = ()=>{
+      const s = loadSettings();
+      s.price_system_enabled = (s.price_system_enabled === false) ? true : false;
+      saveSettings(s);
+      applySettingsToUI();
+      applyPriceMode();
+    };
+
+    // Wenn noch nie gesetzt: einmal öffnen
+    const s0 = loadSettings();
+    if(!s0.mitarbeiter || !s0.einlieferer_id){
+      settingsPanel.classList.remove('hidden');
+      btnSettings.textContent = "⬆️ Einstellungen";
+    }
   });
 </script>
 </body>
