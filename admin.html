@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="de">
 <head>
-    <!-- build:20251215_062635 -->
+    <!-- build:20251215_183945 -->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
@@ -240,18 +240,19 @@ function setToken(t){
   }
 
   async function init(){
+    const err = document.getElementById("auth-error");
+    if(err){ err.classList.add("hidden"); err.textContent = ""; }
     const t = getToken();
-    if(!t){
-      locked.classList.remove("hidden");
-      content.classList.add("hidden");
-      return;
-    }
+    // Immer gesperrt starten – erst nach erfolgreichem API-Call freischalten (verhindert "Flash")
+    locked.classList.remove("hidden");
+    content.classList.add("hidden");
+    if(!t) return;
     try{
+      await refresh();
       locked.classList.add("hidden");
       content.classList.remove("hidden");
-      await refresh();
-      buildExportLinks();
     }catch(e){
+      if(err){ err.classList.remove("hidden"); err.textContent = "Falsches Passwort oder ADMIN_TOKEN nicht gesetzt."; }
       locked.classList.remove("hidden");
       content.classList.add("hidden");
     }
