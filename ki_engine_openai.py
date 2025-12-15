@@ -49,13 +49,17 @@ Marke Produktbezeichnung Typenbezeichnung
 
 Regeln für NAME:
 - Kurz und sachlich
-- KEINE Mengenangaben (kein ml, g, Stück)
-- KEINE Set-Hinweise
-- KEIN MHD
-- KEINE Zustandsangaben
-- KEINE Verpackungshinweise
+- Grundformat: Marke Produktbezeichnung Typenbezeichnung
+- Mengenangaben sind grundsätzlich NICHT im NAME, AUSSER bei GETRÄNKEN (z. B. Secco, Wein, Sekt, Spirituosen):
+  - Erlaubt sind NUR ml oder l und NUR wenn eindeutig sichtbar
+  - Die Mengenangabe MUSS am ENDE stehen (z. B. "Villa Sandi Prosecco DOC 750 ml")
+  - Keine mehrfachen Mengenangaben, keine Set/Packungsangaben im NAME
+- KEINE Set-Hinweise im NAME
+- KEIN MHD im NAME
+- KEINE Zustandsangaben im NAME
+- KEINE Verpackungshinweise im NAME
 - Wenn eine Komponente nicht erkennbar ist, lasse sie weg.
-- Reihenfolge IMMER einhalten.
+- Reihenfolge IMMER einhalten (bei Getränken: Menge ganz am Ende).
 
 ========================
 BESCHREIBUNG (TEXT)
@@ -210,4 +214,4 @@ Aufgabe:
         return None
 
 
-# build:20251215_062635
+# build:20251215_082951
