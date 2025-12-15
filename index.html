@@ -1,14 +1,14 @@
 <!doctype html>
 <html lang="de">
 <head>
-    <!-- build:20251215_093217 -->
+    <!-- build:20251215_094644 -->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
 
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>MyAuktion · Artikelaufnahme</title>
+  <title>MyAuktion Artikelaufnahme • 20251215_062635</title>
 
   <link rel="icon" type="image/x-icon" href="/static/my_icon.ico">
   <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png?v=20251215_062635">
@@ -56,7 +56,6 @@
     .toast{background:#fff;color:#0f172a;border-radius:999px;padding:7px 12px;font-weight:700;box-shadow:0 10px 30px rgba(0,0,0,.18);opacity:0;transform:translateY(-6px) scale(.94);transition:.18s}
     .toast.show{opacity:1;transform:translateY(0) scale(1)}
   </style>
-  <noscript><style>body{background:#0f172a;color:#fff;padding:20px;font-family:system-ui}</style>Bitte JavaScript aktivieren.</noscript>
 </head>
 
 <body class="text-white">
@@ -99,7 +98,53 @@
             <label class="block mb-1 text-xs opacity-80">Lagerort</label>
             <input id="f-lagerort" type="text" class="input" placeholder="z.B. (22) Haushalt/Freizeit 170">
           </div>
-        </div><input id="f-file" type="file" accept="image/*" capture="environment" class="hidden">
+        </div>
+
+        <!-- ⚙️ Einstellungen Panel (auf/zu klappbar) -->
+        <div id="settings-panel" class="glass rounded-2xl p-3 mb-3 hidden">
+          <div class="text-xs opacity-80 mb-2">Startwerte (werden gespeichert und bei jedem Artikel automatisch übernommen)</div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label class="block mb-1 text-xs opacity-80">Mitarbeiter</label>
+              <input id="s-mitarbeiter" type="text" class="input" placeholder="z.B. Jan">
+            </div>
+            <div>
+              <label class="block mb-1 text-xs opacity-80">Einlieferer-ID</label>
+              <input id="s-einlieferer-id" type="text" class="input" placeholder="z.B. 22">
+            </div>
+            <div>
+              <label class="block mb-1 text-xs opacity-80">Menge</label>
+              <input id="s-menge" type="number" class="input" value="1" min="1">
+            </div>
+            <div>
+              <label class="block mb-1 text-xs opacity-80">Lagerstand</label>
+              <input id="s-lagerstand" type="number" class="input" value="1" min="1">
+            </div>
+            <div>
+              <label class="block mb-1 text-xs opacity-80">Übernehmen</label>
+              <input id="s-uebernehmen" type="number" class="input" value="1" min="0">
+            </div>
+            <div>
+              <label class="block mb-1 text-xs opacity-80">Angeliefert (Datum)</label>
+              <input id="s-angeliefert" type="date" class="input">
+            </div>
+            <div class="sm:col-span-2">
+              <label class="block mb-1 text-xs opacity-80">Betriebsmittel</label>
+              <input id="s-betriebsmittel" type="text" class="input" placeholder="Freitext…">
+            </div>
+          </div>
+          <div class="flex items-center justify-between gap-2 mt-3">
+            <div id="settings-summary" class="text-[11px] text-white/80"></div>
+            <div class="flex gap-2">
+              <button id="btn-settings-save" class="btn btn-primary text-xs">Speichern</button>
+              <button id="btn-settings-hide" class="btn btn-ghost text-xs">Einklappen</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="settings-mini" class="text-[11px] text-white/80 mb-3"></div>
+
+<input id="f-file" type="file" accept="image/*" capture="environment" class="hidden">
 
         <div class="thumb mb-2" id="thumb">
           <span class="text-xs text-white/70 text-center">Tippen, um Foto aufzunehmen / auszuwählen</span>
@@ -163,13 +208,15 @@
   const artHint = document.getElementById('artnr-hint');
   const fLager = document.getElementById('f-lagerort');
 
-  // Settings (Startwerte) – gespeichert im Browser
-  const SETTINGS_KEY = "MYAUKTION_SETTINGS_V1";
+  // ⚙️ Einstellungen (Startwerte) – gespeichert im Browser (localStorage)
+  const SETTINGS_KEY = "MYAUKTION_SETTINGS_V2";
 
   const btnSettings = document.getElementById('btn-settings');
-  const modalSettings = document.getElementById('settings-modal');
-  const btnSettingsClose = document.getElementById('btn-settings-close');
+  const panelSettings = document.getElementById('settings-panel');
+  const miniSettings = document.getElementById('settings-mini');
   const btnSettingsSave = document.getElementById('btn-settings-save');
+  const btnSettingsHide = document.getElementById('btn-settings-hide');
+  const settingsSummary = document.getElementById('settings-summary');
 
   const sMitarbeiter = document.getElementById('s-mitarbeiter');
   const sEinliefererId = document.getElementById('s-einlieferer-id');
@@ -179,36 +226,28 @@
   const sAngeliefert = document.getElementById('s-angeliefert');
   const sBetriebsmittel = document.getElementById('s-betriebsmittel');
 
-  function _loadSettings(){
+  function loadSettings(){
     try{
       const raw = localStorage.getItem(SETTINGS_KEY);
-      if(!raw) return {
-        mitarbeiter:"",
-        menge:1,
-        lagerstand:1,
-        uebernehmen:1,
-        einlieferer_id:"",
-        angeliefert:"",
-        betriebsmittel:""
-      };
-      const j = JSON.parse(raw);
+      const d = raw ? JSON.parse(raw) : {};
       return Object.assign({
-        mitarbeiter:"",
-        menge:1,
-        lagerstand:1,
-        uebernehmen:1,
-        einlieferer_id:"",
-        angeliefert:"",
-        betriebsmittel:""
-      }, j||{});
+        mitarbeiter: "",
+        einlieferer_id: "",
+        menge: 1,
+        lagerstand: 1,
+        uebernehmen: 1,
+        angeliefert: "",
+        betriebsmittel: ""
+      }, d || {});
     }catch(e){
-      return {mitarbeiter:"",menge:1,lagerstand:1,uebernehmen:1,einlieferer_id:"",angeliefert:"",betriebsmittel:""};
+      return {mitarbeiter:"",einlieferer_id:"",menge:1,lagerstand:1,uebernehmen:1,angeliefert:"",betriebsmittel:""};
     }
   }
-  function _saveSettings(s){
+  function saveSettings(s){
     try{ localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); }catch(e){}
   }
-  function _fillSettingsUI(s){
+  function fillSettingsUI(s){
+    if(!sMitarbeiter) return;
     sMitarbeiter.value = s.mitarbeiter || "";
     sEinliefererId.value = s.einlieferer_id || "";
     sMenge.value = String(s.menge ?? 1);
@@ -217,7 +256,7 @@
     sAngeliefert.value = s.angeliefert || "";
     sBetriebsmittel.value = s.betriebsmittel || "";
   }
-  function _readSettingsUI(){
+  function readSettingsUI(){
     return {
       mitarbeiter: (sMitarbeiter.value||"").trim(),
       einlieferer_id: (sEinliefererId.value||"").trim(),
@@ -228,15 +267,45 @@
       betriebsmittel: (sBetriebsmittel.value||"").trim()
     };
   }
-  function openSettings(){
-    const s = _loadSettings();
-    _fillSettingsUI(s);
-    modalSettings.classList.remove('hidden');
+  function settingsText(s){
+    const parts = [];
+    if(s.mitarbeiter) parts.push("MA: " + s.mitarbeiter);
+    if(s.einlieferer_id) parts.push("Einl.: " + s.einlieferer_id);
+    parts.push("Menge: " + (s.menge ?? 1));
+    parts.push("Lagerstand: " + (s.lagerstand ?? 1));
+    parts.push("uebernehmen: " + (s.uebernehmen ?? 1));
+    if(s.angeliefert) parts.push("angel.: " + s.angeliefert);
+    if(s.betriebsmittel) parts.push("BM: " + s.betriebsmittel);
+    return parts.join(" · ");
   }
-  function closeSettings(){
-    modalSettings.classList.add('hidden');
+  function updateSettingsMini(){
+    const s = loadSettings();
+    if(miniSettings) miniSettings.textContent = "Einstellungen: " + settingsText(s);
+    if(settingsSummary) settingsSummary.textContent = settingsText(s);
   }
+  function toggleSettings(open){
+    if(!panelSettings) return;
+    const shouldOpen = (open === undefined) ? panelSettings.classList.contains("hidden") : open;
+    if(shouldOpen){
+      const s = loadSettings();
+      fillSettingsUI(s);
+      panelSettings.classList.remove("hidden");
+      updateSettingsMini();
+    const s0 = loadSettings();
+    if(!s0.mitarbeiter && !s0.einlieferer_id){
+      toggleSettings(true);
+    }
 
+    }else{
+      panelSettings.classList.add("hidden");
+      updateSettingsMini();
+    const s0 = loadSettings();
+    if(!s0.mitarbeiter && !s0.einlieferer_id){
+      toggleSettings(true);
+    }
+
+    }
+  }
 
   const fFile = document.getElementById('f-file');
   const thumb = document.getElementById('thumb');
@@ -428,16 +497,16 @@
     const payload = {
       artikelnr: art,
       lagerort: (fLager.value||"").trim(),
-      // Einstellungen (werden automatisch übernommen)
-      mitarbeiter: _loadSettings().mitarbeiter,
-      menge: _loadSettings().menge,
-      lagerstand: _loadSettings().lagerstand,
-      uebernehmen: _loadSettings().uebernehmen,
-      einlieferer_id: _loadSettings().einlieferer_id,
-      angeliefert: _loadSettings().angeliefert,
-      betriebsmittel: _loadSettings().betriebsmittel,
-      // Backward compatibility
-      einlieferer: _loadSettings().einlieferer_id,
+      // Einstellungen (Startwerte)
+      mitarbeiter: loadSettings().mitarbeiter,
+      menge: loadSettings().menge,
+      lagerstand: loadSettings().lagerstand,
+      uebernehmen: loadSettings().uebernehmen,
+      einlieferer_id: loadSettings().einlieferer_id,
+      angeliefert: loadSettings().angeliefert,
+      betriebsmittel: loadSettings().betriebsmittel,
+      // Kompatibilität (alt)
+      einlieferer: loadSettings().einlieferer_id,
       titel: (fTitle.value||"").trim(),
       beschreibung: (fDesc.value||"").trim(),
       reviewed: false
@@ -468,65 +537,19 @@
   };
 
   window.addEventListener('DOMContentLoaded', ()=>{
-    // Settings init
-    const s = _loadSettings();
-    if(!s.mitarbeiter && !s.einlieferer_id){
-      openSettings();
+    updateSettingsMini();
+    const s0 = loadSettings();
+    if(!s0.mitarbeiter && !s0.einlieferer_id){
+      toggleSettings(true);
     }
-    if(btnSettings){ btnSettings.onclick = openSettings; }
-    if(btnSettingsClose){ btnSettingsClose.onclick = closeSettings; }
-    if(btnSettingsSave){ btnSettingsSave.onclick = ()=>{ const ns=_readSettingsUI(); _saveSettings(ns); closeSettings(); toast('Einstellungen gespeichert'); }; }
+
+    if(btnSettings) btnSettings.onclick = ()=> toggleSettings();
+    if(btnSettingsHide) btnSettingsHide.onclick = ()=> toggleSettings(false);
+    if(btnSettingsSave) btnSettingsSave.onclick = ()=>{ const s = readSettingsUI(); saveSettings(s); updateSettingsMini(); toast('Einstellungen gespeichert'); toggleSettings(false); };
 
     if(window.lucide) lucide.createIcons();
     updateArtnrHint();
   });
 </script>
-
-<!-- Einstellungen Modal -->
-<div id="settings-modal" class="fixed inset-0 hidden" style="background:rgba(0,0,0,.55);z-index:60">
-  <div class="max-w-2xl mx-auto mt-10 px-4">
-    <div class="glass rounded-3xl p-4 md:p-6 shadow-xl">
-      <div class="flex items-center justify-between mb-3">
-        <div class="text-lg font-semibold">⚙️ Einstellungen (Startwerte)</div>
-        <button id="btn-settings-close" class="btn btn-ghost text-sm">Schließen</button>
-      </div>
-      <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-        <div>
-          <label class="block mb-1 text-xs opacity-80">Mitarbeiter</label>
-          <input id="s-mitarbeiter" class="input" placeholder="z.B. Jan">
-        </div>
-        <div>
-          <label class="block mb-1 text-xs opacity-80">Einlieferer-ID</label>
-          <input id="s-einlieferer-id" class="input" placeholder="z.B. 22">
-        </div>
-        <div>
-          <label class="block mb-1 text-xs opacity-80">Menge</label>
-          <input id="s-menge" type="number" class="input" value="1" min="1">
-        </div>
-        <div>
-          <label class="block mb-1 text-xs opacity-80">Lagerstand</label>
-          <input id="s-lagerstand" type="number" class="input" value="1" min="1">
-        </div>
-        <div>
-          <label class="block mb-1 text-xs opacity-80">Übernehmen</label>
-          <input id="s-uebernehmen" type="number" class="input" value="1" min="0">
-        </div>
-        <div>
-          <label class="block mb-1 text-xs opacity-80">Angeliefert (Datum)</label>
-          <input id="s-angeliefert" type="date" class="input">
-        </div>
-        <div class="md:col-span-2">
-          <label class="block mb-1 text-xs opacity-80">Betriebsmittel</label>
-          <input id="s-betriebsmittel" class="input" placeholder="Freitext…">
-        </div>
-      </div>
-      <div class="flex gap-2 mt-4 justify-end">
-        <button id="btn-settings-save" class="btn btn-primary text-sm">Speichern</button>
-      </div>
-      <div class="text-[11px] text-white/80 mt-2">Diese Einstellungen bleiben im Browser gespeichert und werden bei jedem neuen Artikel automatisch übernommen.</div>
-    </div>
-  </div>
-</div>
-
 </body>
 </html>
