@@ -14,13 +14,23 @@
 #
 # Start:
 #   python -m uvicorn server_full:app --host 0.0.0.0 --port 5050
-
-from __future__ import annotations
-
 from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, Request, Response
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+
+
+
+def _normalize_title(title: str) -> str:
+    t = (title or "").strip()
+    bad = {"Typenbezeichnung","typenbezeichnung","Typ","typ","Type","type","Model","model","Modell","modell"}
+    parts = [p for p in re.split(r"\s+", t) if p]
+    while parts and parts[-1] in bad:
+        parts.pop()
+    t = " ".join(parts).strip()
+    t = re.sub(r"\bTypenbezeichnung\b", "", t, flags=re.I)
+    t = re.sub(r"\s{2,}", " ", t).strip()
+    return t
 
 from pathlib import Path
 from PIL import Image, ImageOps
@@ -286,7 +296,7 @@ def _run_meta_once(artikelnr: str, img_path: Path) -> Tuple[Optional[Dict[str, A
 
 
 def _apply_ki_to_meta(mj: Dict[str, Any], meta: Dict[str, Any]) -> None:
-    mj["titel"] = meta.get("title", "").strip()
+    mj["titel"] = _normalize_title(meta.get("title", "")).strip()
     mj["beschreibung"] = meta.get("description", "").strip()
     mj["kategorie"] = meta.get("category", "").strip()
 
