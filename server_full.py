@@ -1,15 +1,59 @@
-from fastapi import FastAPI, UploadFile, File, Form, Request, Header, HTTPException, Response
-from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
+# server_full.py – MyAuktion KI-Artikelaufnahme-System (FINAL)
+# Features:
+# - Upload + sofortige Vorschau (Frontend)
+# - Mehrere Fotos pro Artikel
+# - Hintergrund-KI (OpenAI Vision) -> Titel, Beschreibung, Kategorie, Listenpreis
+# - Rufpreis = 20% vom Listenpreis, IMMER auf ganze € aufrunden
+# - Bei Upload wird KI automatisch neu gestartet (auch bei Foto 2/3/…)
+# - Polling kann auf "genau dieses Foto" warten (filename)
+# - Kein KI-Fallback-Text: bei Fehler -> ki_source="failed"
+# - Live-Check Artikelnummer: /api/check_artnr
+# - Foto löschen: /api/delete_image
+# - CSV Export (inkl. Kategorie)
+# - Admin-Only Budget/Flags (Token geschützt): /api/admin/budget /api/admin/articles
+#
+# Start:
+#   python -m uvicorn server_full:app --host 0.0.0.0 --port 5050
+from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, Request, Response
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+
+
+def _normalize_title(title: str) -> str:
+    t = (title or "").strip()
+    bad = {"Typenbezeichnung","typenbezeichnung","Typ","typ","Type","type","Model","model","Modell","modell"}
+    parts = [p for p in re.split(r"\s+", t) if p]
+    while parts and parts[-1] in bad:
+        parts.pop()
+    t = " ".join(parts).strip()
+    t = re.sub(r"\bTypenbezeichnung\b", "", t, flags=re.I)
+    t = re.sub(r"\s{2,}", " ", t).strip()
+    return t
+
 from pathlib import Path
 from PIL import Image, ImageOps
-import io, json, re, csv, zipfile, datetime
+import io, json, time, csv, math, os
+import re
+from typing import Any, Dict, Optional, Tuple
 
 app = FastAPI()
 
-# CORS für Browser-Frontend
+@app.middleware("http")
+async def _no_cache_html(request, call_next):
+    resp = await call_next(request)
+    try:
+        ct = resp.headers.get("content-type", "")
+        if ct.startswith("text/html") or request.url.path in ("/", "/admin", "/static/site.webmanifest", "/static/manifest.webmanifest"):
+            resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+            resp.headers["Pragma"] = "no-cache"
+            resp.headers["Expires"] = "0"
+    except Exception:
+        pass
+    return resp
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -18,389 +62,574 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Basis-Pfad = Ordner, in dem server_full.py liegt
 BASE_DIR = Path(__file__).resolve().parent
 
-# Upload-Ordner
 RAW_DIR = BASE_DIR / "uploads" / "raw"
 PROCESSED_DIR = BASE_DIR / "uploads" / "processed"
+EXPORT_DIR = BASE_DIR / "export"
 RAW_DIR.mkdir(parents=True, exist_ok=True)
 PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
-# Static-Files (für Bilder etc.)
+EXPORT_CSV = EXPORT_DIR / "artikel_export.csv"
+USAGE_JSON = EXPORT_DIR / "ki_usage.json"
+
+# Admin-Schutz (frei wählbar, NICHT OpenAI-Key)
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "").strip()  # leer => Admin offen (nur für Tests)
+DEFAULT_BUDGET_EUR = float((os.getenv("KI_BUDGET_EUR", "10") or "10").replace(",", "."))
+COST_PER_SUCCESS_CALL_EUR = float((os.getenv("KI_COST_PER_SUCCESS_CALL_EUR", "0.003") or "0.003").replace(",", "."))
+
 app.mount("/static", StaticFiles(directory=str(BASE_DIR)), name="static")
 
 
-def _default_meta(artikelnr: str) -> dict:
-    """Fallback-Metadaten, falls (noch) keine KI-Texte vorhanden sind."""
+# ----------------------------
+# Admin Auth
+# ----------------------------
+def _is_admin(request: Request) -> bool:
+    if not ADMIN_TOKEN:
+        return True
+    token = (request.headers.get("X-Admin-Token", "") or "").strip()
+    if not token:
+        token = (request.query_params.get("token", "") or "").strip()
+    return token == ADMIN_TOKEN
+
+
+def _admin_guard(request: Request) -> Optional[JSONResponse]:
+    if _is_admin(request):
+        return None
+    return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+
+
+# ----------------------------
+# Meta JSON
+# ----------------------------
+def _default_meta(artikelnr: str) -> Dict[str, Any]:
     return {
-        "title": f"Artikel {artikelnr}",
-        "description": "Artikel wie abgebildet, genaue Details bitte den Fotos entnehmen.",
-        "category": "Allgemein",
-        "tags": "",
-        "starting_price": 0,
+        "artikelnr": str(artikelnr),
+        "titel": "",
+        "beschreibung": "",
+        "kategorie": "",
+        "retail_price": 0.0,
+        "rufpreis": 0.0,
+        "lagerort": "",
+        "einlieferer": "",
+        "mitarbeiter": "",
+        "lagerstand": 1,
+        "reviewed": False,
+        "ki_source": "",          # pending | realtime | failed | ""
+        "ki_last_error": "",
+        "ki_runtime_ms": 0,
+        "batch_done": False,
+        "last_image": "",
+        "created_at": int(time.time()),
+        "updated_at": int(time.time()),
     }
 
 
-def _load_meta_json(artikelnr: str) -> dict:
-    """Lädt die Metadaten-JSON zu einer Artikelnummer oder liefert Defaults."""
-    meta_path = RAW_DIR / f"{artikelnr}.json"
-    if meta_path.exists():
+def _meta_path(artikelnr: str) -> Path:
+    return RAW_DIR / f"{artikelnr}.json"
+
+
+def _load_meta_json(artikelnr: str) -> Dict[str, Any]:
+    p = _meta_path(artikelnr)
+    data: Dict[str, Any] = {}
+    if p.exists():
         try:
-            data = json.loads(meta_path.read_text(encoding="utf-8"))
+            data = json.loads(p.read_text("utf-8"))
         except Exception:
             data = {}
+    merged = _default_meta(artikelnr)
+    merged.update(data)
+    return merged
+
+
+def _save_meta_json(artikelnr: str, data: Dict[str, Any]) -> None:
+    data["updated_at"] = int(time.time())
+    _meta_path(artikelnr).write_text(json.dumps(data, ensure_ascii=False, indent=2), "utf-8")
+
+
+# ----------------------------
+# KI Usage (Budget Anzeige – Schätzung)
+# ----------------------------
+def _load_usage() -> Dict[str, Any]:
+    if USAGE_JSON.exists():
+        try:
+            u = json.loads(USAGE_JSON.read_text("utf-8"))
+        except Exception:
+            u = {}
     else:
-        data = {}
-
-    data.setdefault("artikelnr", artikelnr)
-    data.setdefault("titel", f"Artikel {artikelnr}")
-    data.setdefault("beschreibung", "")
-    data.setdefault("reviewed", False)
-    data.setdefault("ki_source", "")
-    data.setdefault("batch_done", False)
-    data.setdefault("last_image", "")
-
-    return data
+        u = {}
+    u.setdefault("budget_eur", DEFAULT_BUDGET_EUR)
+    u.setdefault("cost_per_success_call_eur", COST_PER_SUCCESS_CALL_EUR)
+    u.setdefault("success_calls", 0)
+    u.setdefault("failed_calls", 0)
+    u.setdefault("last_error", "")
+    u.setdefault("last_success_at", 0)
+    u.setdefault("spent_est_eur", 0.0)
+    return u
 
 
-def _run_meta(artikelnr: str, img_path: Path) -> dict:
-    """
-    Manuelle KI-Berechnung:
-    - Wird vom /api/describe-Endpunkt verwendet (Button 'KI neu berechnen')
-    - Nutzt ki_engine.generate_meta (Vision + Text über Ollama)
-    """
+def _save_usage(u: Dict[str, Any]) -> None:
+    USAGE_JSON.write_text(json.dumps(u, ensure_ascii=False, indent=2), "utf-8")
+
+
+def _usage_success() -> None:
+    u = _load_usage()
+    u["success_calls"] = int(u.get("success_calls", 0)) + 1
+    u["spent_est_eur"] = round(float(u.get("success_calls", 0)) * float(u.get("cost_per_success_call_eur", COST_PER_SUCCESS_CALL_EUR)), 4)
+    u["last_success_at"] = int(time.time())
+    u["last_error"] = ""
+    _save_usage(u)
+
+
+def _usage_fail(err: str) -> None:
+    u = _load_usage()
+    u["failed_calls"] = int(u.get("failed_calls", 0)) + 1
+    u["last_error"] = (err or "")[:250]
+    _save_usage(u)
+
+
+# ----------------------------
+# CSV Export
+# ----------------------------
+CSV_FIELDS = [
+    "ArtikelNr",
+    "Menge",
+    "Kategorie",
+    "Bezeichnung",
+    "Beschreibung",
+    "Rufpreis",
+    "Lagerstand",
+    "Lagerort",
+    "Einlieferer",
+    "Mitarbeiter",
+    "RetailPreis",
+]
+
+
+def _rebuild_csv_export() -> None:
+    rows = []
+    for meta_file in RAW_DIR.glob("*.json"):
+        try:
+            d = json.loads(meta_file.read_text("utf-8"))
+        except Exception:
+            continue
+
+        nr = str(d.get("artikelnr") or meta_file.stem)
+        rows.append({
+            "ArtikelNr": nr,
+            "Menge": 1,
+            "Kategorie": d.get("kategorie", "") or "",
+            "Bezeichnung": d.get("titel", "") or "",
+            "Beschreibung": d.get("beschreibung", "") or "",
+            "Rufpreis": d.get("rufpreis", 0.0) or 0.0,
+            "Lagerstand": d.get("lagerstand", 1) or 1,
+            "Lagerort": d.get("lagerort", "") or "",
+            "Einlieferer": d.get("einlieferer", "") or "",
+            "Mitarbeiter": d.get("mitarbeiter", "") or "",
+            "RetailPreis": d.get("retail_price", 0.0) or 0.0,
+        })
+
+    def _sort_key(r):
+        try:
+            return int(r["ArtikelNr"])
+        except Exception:
+            return r["ArtikelNr"]
+
+    rows.sort(key=_sort_key)
+
+    with EXPORT_CSV.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=CSV_FIELDS, delimiter=";")
+        w.writeheader()
+        for r in rows:
+            w.writerow(r)
+
+    print("[CSV] Export aktualisiert:", EXPORT_CSV)
+
+
+# ----------------------------
+# KI (1 Versuch, kein Fallback, mit Kontext fürs 2. Foto)
+# ----------------------------
+def _run_meta_once(artikelnr: str, img_path: Path) -> Tuple[Optional[Dict[str, Any]], bool, str, int]:
+    """Return (meta, ok, error, runtime_ms)"""
     try:
-        import ki_engine
-    except ImportError:
-        print("[WARNUNG] ki_engine.py nicht gefunden – nutze Fallback-Metadaten.")
-        return _default_meta(artikelnr)
-
-    try:
-        meta = ki_engine.generate_meta(str(img_path), str(artikelnr))
+        import ki_engine_openai as ki_engine
     except Exception as e:
-        print(f"[KI-FEHLER] generate_meta für {artikelnr} fehlgeschlagen: {e}")
-        return _default_meta(artikelnr)
+        err = f"import_error: {e}"
+        print("[KI] Importfehler:", e)
+        return None, False, err, 0
 
-    if not isinstance(meta, dict):
-        return _default_meta(artikelnr)
+    current = _load_meta_json(artikelnr)
 
-    title = meta.get("title") or f"Artikel {artikelnr}"
-    description = meta.get("description") or _default_meta(artikelnr)["description"]
-    meta["title"] = title
-    meta["description"] = description
-    return meta
+    start = time.time()
+    try:
+        meta = ki_engine.generate_meta(str(img_path), str(artikelnr), context=current)
+        runtime_ms = int((time.time() - start) * 1000)
+
+        if not meta:
+            return None, False, "ki_failed", runtime_ms
+
+        title = (meta.get("title") or "").strip()
+        desc = (meta.get("description") or "").strip()
+        cat = (meta.get("category") or "").strip()
+
+        try:
+            retail = float(meta.get("retail_price", 0) or 0)
+        except Exception:
+            retail = 0.0
+
+        # OK nur wenn Titel + (Beschreibung ODER Preis)
+        if not title or (not desc and retail <= 0):
+            return None, False, "invalid_ki_result", runtime_ms
+
+        meta["title"] = title
+        meta["description"] = desc
+        meta["category"] = cat
+        meta["retail_price"] = retail
+        return meta, True, "", runtime_ms
+
+    except Exception as e:
+        runtime_ms = int((time.time() - start) * 1000)
+        err = str(e)
+        print("[KI] Fehler:", e)
+        return None, False, err, runtime_ms
 
 
+def _apply_ki_to_meta(mj: Dict[str, Any], meta: Dict[str, Any]) -> None:
+    mj["titel"] = _normalize_title(meta.get("title", "")).strip()
+    mj["beschreibung"] = meta.get("description", "").strip()
+    mj["kategorie"] = meta.get("category", "").strip()
+
+    retail_f = float(meta.get("retail_price", 0.0) or 0.0)
+    mj["retail_price"] = round(retail_f, 2)
+
+    # Rufpreis: 20% auf ganze € aufrunden
+    mj["rufpreis"] = float(math.ceil(retail_f * 0.20)) if retail_f > 0 else 0.0
+
+
+def _run_meta_background(artikelnr: str, img_path: Path) -> None:
+    print(f"[BG-KI] Starte Hintergrund-KI für Artikel {artikelnr}")
+    meta, ok, err, runtime_ms = _run_meta_once(artikelnr, img_path)
+
+    mj = _load_meta_json(artikelnr)
+    mj["ki_runtime_ms"] = runtime_ms
+    mj["last_image"] = img_path.name
+    mj["batch_done"] = True
+
+    if ok and meta:
+        _apply_ki_to_meta(mj, meta)
+        mj["ki_source"] = "realtime"
+        mj["ki_last_error"] = ""
+        mj["reviewed"] = False
+        _save_meta_json(artikelnr, mj)
+        _usage_success()
+    else:
+        mj["ki_source"] = "failed"
+        mj["ki_last_error"] = err or "ki_failed"
+        _save_meta_json(artikelnr, mj)
+        _usage_fail(mj["ki_last_error"])
+
+    _rebuild_csv_export()
+    print(f"[BG-KI] Fertig für Artikel {artikelnr} – ki_ok={ok}")
+
+
+# ----------------------------
+# Routes
+# ----------------------------
 @app.get("/")
 def root():
-    """Liefert index.html (Lager-Oberfläche)."""
-    index_path = BASE_DIR / "index.html"
-    if not index_path.exists():
-        return JSONResponse(
-            {"ok": False, "error": "index.html nicht gefunden"}, status_code=500
-        )
-    return FileResponse(str(index_path))
+    return FileResponse(str(BASE_DIR / "index.html"))
 
 
 @app.get("/admin")
 def admin_root():
-    """Liefert admin.html (Büro-Kontrolloberfläche)."""
-    admin_path = BASE_DIR / "admin.html"
-    if not admin_path.exists():
-        return JSONResponse(
-            {"ok": False, "error": "admin.html nicht gefunden"}, status_code=500
-        )
-    return FileResponse(str(admin_path))
+    return FileResponse(str(BASE_DIR / "admin.html"))
 
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "status": "running"}
+    return {"ok": True}
 
 
-@app.post("/api/upload")
-async def upload(file: UploadFile = File(...), artikelnr: str = Form(...)):
-    """
-    Nimmt ein Bild entgegen, dreht es korrekt, speichert als ARTNR_N.jpg
-    (0,1,2,...) und liefert nur Standard-Metadaten zurück.
-    KI läuft NICHT mehr hier, sondern im Batch-Worker.
-    """
-    artikelnr = str(artikelnr).strip()
-    data = await file.read()
-    try:
-        img = Image.open(io.BytesIO(data))
-        # EXIF-Drehung korrigieren (Handy-Fotos)
-        img = ImageOps.exif_transpose(img)
-        img = img.convert("RGB")
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": f"Ungültiges Bildformat: {e}"}, 400)
+@app.get("/api/export.csv")
+def export_csv():
+    if not EXPORT_CSV.exists():
+        _rebuild_csv_export()
+    return FileResponse(str(EXPORT_CSV), filename="artikel_export.csv", media_type="text/csv")
 
-    # nächsten Index für diese Artikelnummer finden (_0, _1, _2, ...)
-    existing = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
-    if existing:
-        last = existing[-1]
+
+@app.get("/api/next_artikelnr")
+def next_artikelnr():
+    max_nr = 0
+    for p in RAW_DIR.glob("*.json"):
         try:
-            last_idx = int(last.stem.split("_")[-1])
-        except ValueError:
-            last_idx = -1
-        next_idx = last_idx + 1
-    else:
-        next_idx = 0
-
-    out = RAW_DIR / f"{artikelnr}_{next_idx}.jpg"
-    img.save(out, "JPEG", quality=80, optimize=True)
-
-    # >>> NEU: KI direkt beim Upload ausführen (eine Modellanfrage)
-    meta = _run_meta(artikelnr, out)
-
-    return {
-        "ok": True,
-        "path": str(out),
-        "meta": {
-            "title": meta.get("title", f"Artikel {artikelnr}"),
-            "description": meta.get("description", ""),
-        },
-    }
-
-
-@app.get("/api/describe")
-def describe(artikelnr: str):
-    """
-    Manuelle Neu-Berechnung der KI anhand des letzten Bildes für diese Artikelnummer.
-    Wird nur vom 'KI neu berechnen'-Button verwendet.
-    """
-    artikelnr = str(artikelnr).strip()
-    candidates = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
-    if not candidates:
-        return {"ok": False, "error": "Bild nicht gefunden"}
-
-    # immer das neueste Bild nehmen
-    img_path = candidates[-1]
-    meta = _run_meta(artikelnr, img_path)
-
-    return {
-        "ok": True,
-        "title": meta.get("title", f"Artikel {artikelnr}"),
-        "description": meta.get("description", ""),
-    }
+            d = json.loads(p.read_text("utf-8"))
+            nr = int(d.get("artikelnr", 0))
+            max_nr = max(max_nr, nr)
+        except Exception:
+            pass
+    return {"ok": True, "next": max_nr + 1 if max_nr else 1}
 
 
 @app.get("/api/check_artnr")
 def check_artnr(artikelnr: str):
-    """Prüft, ob es bereits Dateien mit dieser Artikelnummer im raw-Ordner gibt."""
     artikelnr = str(artikelnr).strip()
-    exists = any(f.name.startswith(artikelnr + "_") for f in RAW_DIR.glob("*"))
-    return {"ok": True, "exists": exists}
+    exists = _meta_path(artikelnr).exists() or any(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
+    return {"ok": True, "exists": bool(exists)}
+
+
+@app.post("/api/upload")
+async def upload(
+    file: UploadFile = File(...),
+    artikelnr: str = Form(...),
+    background_tasks: BackgroundTasks = None,
+):
+    artikelnr = str(artikelnr).strip()
+    data = await file.read()
+
+    try:
+        img = Image.open(io.BytesIO(data))
+        img = ImageOps.exif_transpose(img)
+        img = img.convert("RGB")
+
+        # SPEED: kleiner + schneller für Base64/Upload
+        img.thumbnail((1024, 1024))
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"Ungültiges Bild: {e}"}, status_code=400)
+
+    existing = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
+    idx = int(existing[-1].stem.split("_")[-1]) + 1 if existing else 0
+    out = RAW_DIR / f"{artikelnr}_{idx}.jpg"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    img.save(out, "JPEG", quality=78)
+
+    # set pending, damit Polling NICHT bei altem realtime sofort stoppt
+    mj = _load_meta_json(artikelnr)
+    mj["last_image"] = out.name
+    mj["ki_source"] = "pending"
+    mj["ki_last_error"] = ""
+    mj["batch_done"] = False
+    _save_meta_json(artikelnr, mj)
+
+    _rebuild_csv_export()
+
+    if background_tasks:
+        background_tasks.add_task(_run_meta_background, artikelnr, out)
+
+    return {"ok": True, "filename": out.name}
 
 
 @app.get("/api/images")
 def images(artikelnr: str):
-    """Gibt eine Liste von Bildpfaden zu dieser Artikelnummer zurück (RAW_DIR)."""
     artikelnr = str(artikelnr).strip()
     files = []
-    for f in RAW_DIR.glob(f"{artikelnr}_*.jpg"):
+    for f in sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg")):
         rel = f.relative_to(BASE_DIR)
         files.append("/static/" + str(rel).replace("\\", "/"))
     return {"ok": True, "files": files}
 
 
+@app.post("/api/delete_image")
+def delete_image(payload: Dict[str, Any]):
+    artikelnr = str(payload.get("artikelnr", "")).strip()
+    filename = str(payload.get("filename", "")).strip()
+
+    if not artikelnr or not filename:
+        return JSONResponse({"ok": False, "error": "artikelnr/filename fehlt"}, status_code=400)
+
+    # Sicherheitscheck: nur Dateien dieses Artikels erlauben
+    if not filename.startswith(f"{artikelnr}_") or not filename.lower().endswith(".jpg"):
+        return JSONResponse({"ok": False, "error": "ungültiger Dateiname"}, status_code=400)
+
+    path = RAW_DIR / filename
+    if not path.exists():
+        return JSONResponse({"ok": False, "error": "Datei nicht gefunden"}, status_code=404)
+
+    try:
+        path.unlink()
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"löschen fehlgeschlagen: {e}"}, status_code=500)
+
+    mj = _load_meta_json(artikelnr)
+    pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
+    mj["last_image"] = pics[-1].name if pics else ""
+    _save_meta_json(artikelnr, mj)
+
+    _rebuild_csv_export()
+    return {"ok": True}
+
+
 @app.get("/api/meta")
-def get_meta(artikelnr: str):
-    """Gibt Titel/Beschreibung/Status (+ Bild) zu einer Artikelnummer zurück."""
+def meta(artikelnr: str):
     artikelnr = str(artikelnr).strip()
-    if not artikelnr:
-        return {"ok": False, "error": "Artikelnummer fehlt"}
+    mj = _load_meta_json(artikelnr)
 
-    data = _load_meta_json(artikelnr)
-
-    # neuestes Bild bestimmen
-    candidates = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
+    pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
     img_url = ""
-    if candidates:
-        rel = candidates[-1].relative_to(BASE_DIR)
+    if pics:
+        rel = pics[-1].relative_to(BASE_DIR)
         img_url = "/static/" + str(rel).replace("\\", "/")
 
     return {
         "ok": True,
         "artikelnr": artikelnr,
-        "titel": data.get("titel") or f"Artikel {artikelnr}",
-        "beschreibung": data.get("beschreibung") or "",
-        "reviewed": bool(data.get("reviewed", False)),
-        "ki_source": data.get("ki_source") or "",
+        "titel": mj.get("titel", "") or "",
+        "beschreibung": mj.get("beschreibung", "") or "",
+        "kategorie": mj.get("kategorie", "") or "",
+        "retail_price": mj.get("retail_price", 0.0) or 0.0,
+        "rufpreis": mj.get("rufpreis", 0.0) or 0.0,
+        "lagerort": mj.get("lagerort", "") or "",
+        "einlieferer": mj.get("einlieferer", "") or "",
+        "mitarbeiter": mj.get("mitarbeiter", "") or "",
+        "reviewed": bool(mj.get("reviewed", False)),
+        "ki_source": mj.get("ki_source", "") or "",
+        "ki_last_error": mj.get("ki_last_error", "") or "",
+        "last_image": mj.get("last_image", "") or "",
         "image": img_url,
     }
 
 
-@app.get("/api/next_artikelnr")
-def next_artikelnr():
-    """
-    Ermittelt die nächste freie Artikelnummer anhand vorhandener JSONs/Bilder.
-    Falls nichts vorhanden ist, beginnt bei 1.
-    """
-    max_nr = 0
-
-    # JSON-Dateien
-    for meta_path in RAW_DIR.glob("*.json"):
-        try:
-            data = json.loads(meta_path.read_text(encoding="utf-8"))
-            art_str = str(data.get("artikelnr") or meta_path.stem)
-        except Exception:
-            art_str = meta_path.stem
-        if art_str.isdigit():
-            n = int(art_str)
-            max_nr = max(max_nr, n)
-
-    # Fallback: falls nur Bilder existieren
-    for img_path in RAW_DIR.glob("*_*.jpg"):
-        art_str = img_path.stem.split("_")[0]
-        if art_str.isdigit():
-            n = int(art_str)
-            max_nr = max(max_nr, n)
-
-    next_nr = max_nr + 1 if max_nr > 0 else 1
-    return {"ok": True, "next": next_nr}
-
-
 @app.post("/api/save")
-def save(data: dict):
-    """Speichert Metadaten pro Artikelnummer als JSON (merge mit bestehender Datei)."""
-    artikelnr = str(data.get("artikelnr") or "").strip()
+def save(data: Dict[str, Any]):
+    artikelnr = str(data.get("artikelnr", "")).strip()
     if not artikelnr:
-        return {"ok": False, "error": "Artikelnummer fehlt"}
+        return JSONResponse({"ok": False, "error": "Artikelnummer fehlt"}, status_code=400)
 
-    meta_path = RAW_DIR / f"{artikelnr}.json"
+    mj = _load_meta_json(artikelnr)
+    for k in ["titel", "beschreibung", "lagerort", "einlieferer", "mitarbeiter", "kategorie"]:
+        if k in data and data[k] is not None:
+            mj[k] = str(data[k])
+    if "reviewed" in data:
+        mj["reviewed"] = bool(data.get("reviewed", False))
 
-    # bestehende Metadaten laden (z.B. von KI-Batch)
-    if meta_path.exists():
-        try:
-            meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        except Exception:
-            meta = {"artikelnr": artikelnr}
-    else:
-        meta = {"artikelnr": artikelnr}
-
-    # neue Daten darüberlegen, KI-Felder bleiben erhalten, falls nicht überschrieben
-    meta.update(data)
-
-    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    return {"ok": True, "saved": str(meta_path)}
+    _save_meta_json(artikelnr, mj)
+    _rebuild_csv_export()
+    return {"ok": True}
 
 
+@app.get("/api/describe")
+def describe(artikelnr: str):
+    artikelnr = str(artikelnr).strip()
+    pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
+    if not pics:
+        return JSONResponse({"ok": False, "error": "Kein Bild für diese Artikelnummer gefunden."}, status_code=400)
 
-def _admin_collect_items(status: str = "unreviewed"):
-    items = []
-    for meta_path in RAW_DIR.glob("*.json"):
-        try:
-            data = json.loads(meta_path.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        artikelnr = str(data.get("artikelnr") or meta_path.stem)
-        titel = data.get("titel") or f"Artikel {artikelnr}"
-        beschreibung = data.get("beschreibung") or ""
-        reviewed = bool(data.get("reviewed", False))
-        ki_source = data.get("ki_source") or data.get("ki_status") or ""
-        # optional images
-        imgs = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
-        img_url = f"/static/uploads/raw/{imgs[0].name}" if imgs else ""
-        if status == "unreviewed" and reviewed:
-            continue
-        items.append({
-            "artikelnr": artikelnr,
-            "titel": titel,
-            "beschreibung": beschreibung,
-            "image": img_url,
-            "reviewed": reviewed,
-            "ki_source": ki_source,
-        })
-    items.sort(key=lambda x: x["artikelnr"])
-    return items
+    img_path = pics[-1]
+
+    # set pending for manual too
+    mj = _load_meta_json(artikelnr)
+    mj["ki_source"] = "pending"
+    mj["ki_last_error"] = ""
+    mj["batch_done"] = False
+    mj["last_image"] = img_path.name
+    _save_meta_json(artikelnr, mj)
+
+    meta, ok, err, runtime_ms = _run_meta_once(artikelnr, img_path)
+
+    mj = _load_meta_json(artikelnr)
+    mj["ki_runtime_ms"] = runtime_ms
+    mj["last_image"] = img_path.name
+    mj["batch_done"] = True
+
+    if ok and meta:
+        _apply_ki_to_meta(mj, meta)
+        mj["ki_source"] = "realtime"
+        mj["ki_last_error"] = ""
+        mj["reviewed"] = False
+        _save_meta_json(artikelnr, mj)
+        _usage_success()
+        _rebuild_csv_export()
+        return {
+            "ok": True,
+            "title": mj["titel"],
+            "description": mj["beschreibung"],
+            "category": mj.get("kategorie", ""),
+            "retail_price": mj["retail_price"],
+            "rufpreis": mj["rufpreis"],
+            "ki_runtime_ms": runtime_ms,
+        }
+
+    mj["ki_source"] = "failed"
+    mj["ki_last_error"] = err or "ki_failed"
+    _save_meta_json(artikelnr, mj)
+    _usage_fail(mj["ki_last_error"])
+    _rebuild_csv_export()
+    return JSONResponse({"ok": False, "error": mj["ki_last_error"]}, status_code=502)
 
 
-@app.delete("/api/image")
-def delete_image(artikelnr: str, filename: str):
-    art = str(artikelnr).strip()
-    fn = str(filename).strip()
-    # security: only allow basename, no path traversal
-    if "/" in fn or "\" in fn or ".." in fn:
-        raise HTTPException(status_code=400, detail="invalid filename")
-    p = RAW_DIR / fn
-    if not p.exists():
-        raise HTTPException(status_code=404, detail="file not found")
-    # ensure it belongs to article
-    if not fn.startswith(art + "_"):
-        raise HTTPException(status_code=404, detail="file not found")
-    p.unlink(missing_ok=True)
-    remaining = [f"/static/uploads/raw/{x.name}" for x in sorted(RAW_DIR.glob(f"{art}_*.jpg"))]
-    return {"ok": True, "remaining": remaining}
+# ----------------------------
+# Admin API (Token geschützt)
+# ----------------------------
+@app.get("/api/admin/budget")
+def admin_budget(request: Request):
+    guard = _admin_guard(request)
+    if guard:
+        return guard
+
+    u = _load_usage()
+    budget = float(u.get("budget_eur", DEFAULT_BUDGET_EUR))
+    spent = float(u.get("spent_est_eur", 0.0))
+    remaining = round(max(budget - spent, 0.0), 4)
+
+    return {
+        "ok": True,
+        "budget_eur": budget,
+        "spent_est_eur": spent,
+        "remaining_est_eur": remaining,
+        "success_calls": int(u.get("success_calls", 0)),
+        "failed_calls": int(u.get("failed_calls", 0)),
+        "cost_per_success_call_eur": float(u.get("cost_per_success_call_eur", COST_PER_SUCCESS_CALL_EUR)),
+        "last_success_at": int(u.get("last_success_at", 0)),
+        "last_error": u.get("last_error", "") or "",
+    }
+
 
 @app.get("/api/admin/articles")
-def admin_articles(status: str = "unreviewed"):
-    """Liefert eine Liste von Artikeln für die Büro-Kontrolle."""
-    items = _admin_collect_items(status)
-    return {"ok": True, "items": items}
+def admin_articles(request: Request, category: str = "", only_failed: int = 0):
+    guard = _admin_guard(request)
+    if guard:
+        return guard
 
-
-
-@app.get("/api/admin/export.csv")
-def admin_export_csv(status: str = "all"):
-    items = _admin_collect_items(status)
-    # CSV in memory
-    buf = io.StringIO()
-    writer = csv.writer(buf, delimiter=";")
-    writer.writerow(["artikelnr","titel","beschreibung","reviewed","ki_source"])
-    for it in items:
-        writer.writerow([it.get("artikelnr",""), it.get("titel",""), it.get("beschreibung",""), int(bool(it.get("reviewed"))), it.get("ki_source","")])
-    data = buf.getvalue().encode("utf-8")
-    filename = f"artikel_export_{status}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-    return Response(content=data, media_type="text/csv; charset=utf-8", headers={
-        "Content-Disposition": f'attachment; filename="{filename}"'
-    })
-
-
-@app.get("/api/admin/photos.zip")
-def admin_export_photos_zip(status: str = "all"):
-    items = _admin_collect_items(status)
-    mem = io.BytesIO()
-    with zipfile.ZipFile(mem, "w", compression=zipfile.ZIP_DEFLATED) as z:
-        for it in items:
-            art = str(it.get("artikelnr",""))
-            for img_path in sorted(RAW_DIR.glob(f"{art}_*.jpg")):
-                # zip path: artikelnr/filename
-                z.write(img_path, arcname=f"{art}/{img_path.name}")
-            meta_path = RAW_DIR / f"{art}.json"
-            if meta_path.exists():
-                z.write(meta_path, arcname=f"{art}/{meta_path.name}")
-    mem.seek(0)
-    filename = f"fotos_{status}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
-    return StreamingResponse(mem, media_type="application/zip", headers={
-        "Content-Disposition": f'attachment; filename="{filename}"'
-    })
-
-@app.post("/api/admin/articles/update")
-def admin_articles_update(data: dict):
-    """
-    Aktualisiert Titel/Beschreibung/Reviewed-Status für eine Artikelnummer.
-    Wird vom Büro-UI aufgerufen.
-    """
-    artikelnr = str(data.get("artikelnr") or "").strip()
-    if not artikelnr:
-        return {"ok": False, "error": "Artikelnummer fehlt"}
-
-    meta_path = RAW_DIR / f"{artikelnr}.json"
-    if meta_path.exists():
+    items = []
+    for p in RAW_DIR.glob("*.json"):
         try:
-            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            mj = json.loads(p.read_text("utf-8"))
         except Exception:
-            meta = {"artikelnr": artikelnr}
-    else:
-        meta = {"artikelnr": artikelnr}
+            continue
 
-    meta["titel"] = data.get("titel") or f"Artikel {artikelnr}"
-    meta["beschreibung"] = data.get("beschreibung") or ""
-    meta["reviewed"] = bool(data.get("reviewed", True))
+        nr = str(mj.get("artikelnr", p.stem))
+        cat = (mj.get("kategorie", "") or "").strip()
 
-    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        if category and cat.lower() != category.strip().lower():
+            continue
+        if only_failed and (mj.get("ki_source") != "failed"):
+            continue
 
-    return {"ok": True}
+        pics = sorted(RAW_DIR.glob(f"{nr}_*.jpg"))
+        img_url = ""
+        if pics:
+            rel = pics[-1].relative_to(BASE_DIR)
+            img_url = "/static/" + str(rel).replace("\\", "/")
+
+        items.append({
+            "artikelnr": nr,
+            "titel": mj.get("titel", "") or "",
+            "beschreibung": mj.get("beschreibung", "") or "",
+            "kategorie": cat,
+            "retail_price": mj.get("retail_price", 0.0) or 0.0,
+            "rufpreis": mj.get("rufpreis", 0.0) or 0.0,
+            "reviewed": bool(mj.get("reviewed", False)),
+            "ki_source": mj.get("ki_source", "") or "",
+            "ki_last_error": mj.get("ki_last_error", "") or "",
+            "last_image": mj.get("last_image", "") or "",
+            "image": img_url,
+        })
+
+    def _sort_key(x):
+        try:
+            return int(x["artikelnr"])
+        except Exception:
+            return x["artikelnr"]
+
+    items.sort(key=_sort_key)
+    return {"ok": True, "items": items}
