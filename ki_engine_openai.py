@@ -50,7 +50,29 @@ Marke Produktbezeichnung Typenbezeichnung
 Regeln für NAME:
 - Kurz und sachlich
 - Grundformat: Marke Produktbezeichnung Typenbezeichnung
-- Mengenangaben sind grundsätzlich NICHT im NAME, AUSSER bei GETRÄNKEN (z. B. Secco, Wein, Sekt, Spirituosen):
+- Mengenangaben sind grundsätzlich NICHT im NAME, AUSSER bei:
+  - GETRÄNKEN (z. B. Secco, Wein, Sekt, Spirituosen)
+  - TIERNahrung (z. B. Hunde- oder Katzenfutter)
+- Regeln für erlaubte Mengenangaben:
+  - Erlaubt sind NUR ml / l (Getränke) bzw. g / kg (Tiernahrung)
+  - **NUR wenn eindeutig sichtbar auf dem Foto**
+  - **KEIN SCHÄTZEN, KEINE STANDARDMENGEN**
+  - Wenn die Menge nicht klar lesbar ist: **WEGLASSEN**
+  - WENN AUF EINEM KARTON / UMKARTON eindeutig sichtbar:
+    → Stückzahl × Einzelmenge ist ERLAUBT
+    → Format IMMER: 12x200 ml oder 12x200 g (kein Leerzeichen um das x)
+  - Die Mengenangabe MUSS am ENDE stehen
+  - Beispiele:
+    - Einzelartikel Getränk: "Villa Sandi Prosecco DOC 200 ml"
+    - Karton Getränk: "Villa Sandi Prosecco DOC 12x200 ml"
+    - Einzelartikel Tiernahrung: "Royal Canin Puppy 200 g"
+    - Karton Tiernahrung: "Royal Canin Puppy 12x200 g"
+  - Keine weiteren Set-/Bundle-Texte im NAME
+- KEIN MHD im NAME
+- KEINE Zustandsangaben im NAME
+- KEINE Verpackungshinweise im NAME
+- Wenn eine Komponente nicht erkennbar ist, lasse sie weg.
+- Reihenfolge IMMER einhalten.
   - Erlaubt sind NUR ml oder l und NUR wenn eindeutig sichtbar
   - Die Mengenangabe MUSS am ENDE stehen (z. B. "Villa Sandi Prosecco DOC 750 ml")
   - Keine mehrfachen Mengenangaben, keine Set/Packungsangaben im NAME
@@ -75,6 +97,11 @@ In die Beschreibung kommt ALLES, was nicht zur Bezeichnung gehört:
 - Ergänzungen aus weiteren Fotos (fehlende Infos ergänzen, nichts erfinden)
 
 TEXT: 1–3 kurze, sachliche Sätze.
+
+WICHTIG:
+- Wenn etwas nicht klar sichtbar/lesbar ist: **NICHT raten**.
+- Keine Standardannahmen (z. B. 750 ml, 1 l, 100 ml, 200 g, 1 kg).
+- Stückzahlen (z. B. 6x, 12x) NUR verwenden, wenn sie klar auf dem Foto lesbar sind (typisch: Karton).
 
 ========================
 KATEGORIE
@@ -214,4 +241,4 @@ Aufgabe:
         return None
 
 
-# build:20251215_082951
+# build:20251215_084727
