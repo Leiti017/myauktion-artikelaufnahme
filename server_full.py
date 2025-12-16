@@ -71,7 +71,36 @@ RAW_DIR.mkdir(parents=True, exist_ok=True)
 PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
+def _restore_from_data_json() -> None:
+    """Stellt Meta-JSONs in RAW_DIR aus DATA_JSON wieder her (falls z.B. Prozess neu startet)."""
+    if not DATA_JSON.exists():
+        return
+    # Wenn schon Meta-Dateien existieren, nichts tun
+    if any(RAW_DIR.glob('*.json')):
+        return
+    try:
+        arr = json.loads(DATA_JSON.read_text('utf-8'))
+    except Exception:
+        return
+    if not isinstance(arr, list):
+        return
+    restored = 0
+    for d in arr:
+        try:
+            nr = str(d.get('artikelnr') or d.get('ArtikelNr') or '').strip()
+            if not nr:
+                continue
+            # in unserem System ist RAW_DIR/<artikelnr>.json das Meta-File
+            _save_meta_json(nr, d)
+            restored += 1
+        except Exception:
+            continue
+    if restored:
+        print(f"[DATA] Wiederhergestellt: {restored} Artikel aus {DATA_JSON}")
+
+
 EXPORT_CSV = EXPORT_DIR / "eartikel_export.csv"
+DATA_JSON = EXPORT_DIR / "artikel_data.json"  # persistenter Dump aller Metadaten
 USAGE_JSON = EXPORT_DIR / "ki_usage.json"
 
 # Admin-Schutz (frei wählbar, NICHT OpenAI-Key)
@@ -215,6 +244,7 @@ CSV_FIELDS = [
 
 
 def _rebuild_csv_export() -> None:
+_rebuild_data_json()
     rows = []
     for meta_file in RAW_DIR.glob("*.json"):
         try:
@@ -255,6 +285,44 @@ def _rebuild_csv_export() -> None:
 
     print("[CSV] Export aktualisiert:", EXPORT_CSV)
 
+
+
+def _rebuild_data_json() -> None:
+    """Schreibt alle Artikel-Metadaten zusätzlich gesammelt in eine Datei (Variante A)."""
+    rows = []
+    for meta_file in RAW_DIR.glob('*.json'):
+        try:
+            d = json.loads(meta_file.read_text('utf-8'))
+        except Exception:
+            continue
+        if isinstance(d, dict):
+            rows.append(d)
+    def _sort_key(d: dict):
+        try:
+            return int(str(d.get('artikelnr') or d.get('ArtikelNr') or 0))
+        except Exception:
+            return str(d.get('artikelnr') or d.get('ArtikelNr') or '')
+    rows.sort(key=_sort_key)
+    try:
+        DATA_JSON.write_text(json.dumps(rows, ensure_ascii=False, indent=2), 'utf-8')
+        print('[DATA] Dump aktualisiert:', DATA_JSON)
+    except Exception as e:
+        print('[DATA] Dump fehlgeschlagen:', e)
+
+
+@app.on_event('startup')
+def _startup_rebuild() -> None:
+    # Falls ein globaler Dump vorhanden ist und keine Einzel-Metas existieren, wiederherstellen
+    try:
+        _restore_from_data_json()
+    except Exception:
+        pass
+    # Exporte initial auf Stand bringen
+    try:
+        _rebuild_csv_export()
+        _rebuild_data_json()
+    except Exception:
+        pass
 
 # ----------------------------
 # KI (1 Versuch, kein Fallback, mit Kontext fürs 2. Foto)
@@ -339,6 +407,7 @@ def _run_meta_background(artikelnr: str, img_path: Path) -> None:
         _usage_fail(mj["ki_last_error"])
 
     _rebuild_csv_export()
+    _rebuild_data_json()
     print(f"[BG-KI] Fertig für Artikel {artikelnr} – ki_ok={ok}")
 
 
@@ -374,6 +443,7 @@ def health_head():
 def export_csv():
     if not EXPORT_CSV.exists():
         _rebuild_csv_export()
+        _rebuild_data_json()
     return FileResponse(str(EXPORT_CSV), filename="eartikel_export.csv", media_type="text/csv")
 
 
@@ -431,6 +501,7 @@ async def upload(
     _save_meta_json(artikelnr, mj)
 
     _rebuild_csv_export()
+    _rebuild_data_json()
 
     if background_tasks:
         background_tasks.add_task(_run_meta_background, artikelnr, out)
@@ -475,6 +546,7 @@ def delete_image(payload: Dict[str, Any]):
     _save_meta_json(artikelnr, mj)
 
     _rebuild_csv_export()
+    _rebuild_data_json()
     return {"ok": True}
 
 
@@ -558,6 +630,7 @@ def save(data: Dict[str, Any]):
 
     _save_meta_json(artikelnr, mj)
     _rebuild_csv_export()
+    _rebuild_data_json()
     return {"ok": True}
 
 
@@ -593,6 +666,7 @@ def describe(artikelnr: str):
         _save_meta_json(artikelnr, mj)
         _usage_success()
         _rebuild_csv_export()
+        _rebuild_data_json()
         return {
             "ok": True,
             "title": mj["titel"],
@@ -608,6 +682,7 @@ def describe(artikelnr: str):
     _save_meta_json(artikelnr, mj)
     _usage_fail(mj["ki_last_error"])
     _rebuild_csv_export()
+    _rebuild_data_json()
     return JSONResponse({"ok": False, "error": mj["ki_last_error"]}, status_code=502)
 
 
@@ -698,4 +773,3 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", "10000"))
     print(f"[START] Server läuft auf Port {port}")
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
-
