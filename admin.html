@@ -1,14 +1,14 @@
 <!doctype html>
 <html lang="de">
 <head>
-    <!-- build:ADMIN_NO_REFRESH_20251216_063609 -->
+    <!-- build:ADMIN_EXPORT_NO_REFRESH_20251216_065009 -->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
 
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>MyAuktion • Admin</title>
+  <title>MyAuktion Admin • 20251215_062635</title>
   <link rel="icon" type="image/x-icon" href="/static/my_icon.ico">
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
@@ -75,8 +75,7 @@
   </div>
   <div class="text-[11px] opacity-70 mt-2">Leer lassen = kompletter Export.</div>
 </div>
-
-          </div>
+</div>
       </div>
 
       <div class="grid md:grid-cols-5 gap-3 mt-4">
@@ -176,7 +175,6 @@
   const fCat = document.getElementById('f-cat');
   const fFailed = document.getElementById('f-failed');
   const fQ = document.getElementById('f-q');
-  const btnRefresh = document.getElementById('btn-refresh');
 
 function getToken(){
   // Safari/Privatmodus kann localStorage zicken -> zusätzlich Token per URL erlauben
@@ -281,7 +279,6 @@ function setToken(t){
     await init();
   };
 
-  btnRefresh.onclick = refresh;
   fCat.onchange = refresh;
   fFailed.onchange = refresh;
   fQ.oninput = ()=> init();

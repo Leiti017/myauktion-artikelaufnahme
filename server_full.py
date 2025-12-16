@@ -40,33 +40,6 @@ from typing import Any, Dict, Optional, Tuple
 
 app = FastAPI()
 
-
-@app.post("/api/delete_last_image")
-def delete_last_image(data: Dict[str, Any]):
-    artikelnr = str(data.get("artikelnr", "")).strip()
-    if not artikelnr:
-        return JSONResponse({"ok": False, "error": "artikelnr fehlt"}, status_code=400)
-
-    pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
-    if not pics:
-        return {"ok": True, "deleted": None}
-
-    last = pics[-1]
-    try:
-        last.unlink()
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-
-    # Update meta last_image if it was pointing to this file
-    mj = _load_meta_json(artikelnr)
-    li = str(mj.get("last_image") or "")
-    if li and Path(li).name == last.name:
-        mj["last_image"] = ""
-        _save_meta_json(artikelnr, mj)
-
-    return {"ok": True, "deleted": last.name}
-
-
 @app.middleware("http")
 async def _no_cache_html(request, call_next):
     resp = await call_next(request)
@@ -234,100 +207,92 @@ CSV_FIELDS = [
 ]
 
 
-def _rebuild_csv_export(from_nr: str = "", to_nr: str = "") -> None:
-    """Baut artikel_export.csv im Excel-Format:
-    - Semikolon getrennt
-    - UTF-8 BOM (Excel: Umlaute korrekt)
-    - Preise immer mit 1 Dezimalstelle (z.B. 4.0)
-    Optional: Filter by Artikelnr Bereich (inklusive).
-    """
-    def _in_range(nr: str) -> bool:
-        if not from_nr and not to_nr:
-            return True
-        try:
-            ni = int(nr)
-            if from_nr:
-                if ni < int(from_nr):
-                    return False
-            if to_nr:
-                if ni > int(to_nr):
-                    return False
-            return True
-        except Exception:
-            # Fallback: string compare
-            if from_nr and nr < from_nr:
-                return False
-            if to_nr and nr > to_nr:
-                return False
-            return True
-
-    header = ["ArtikelNr","Menge","Bezeichnung","Beschreibung","Preis","Lagerort","Lagerstand","uebernehmen","Einlieferer-ID","angeliefert","Betriebsmittel"]
-
-    out = io.StringIO()
-    w = csv.writer(out, delimiter=';', quotechar='"', quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
-
-    w.writerow(header)
-
-    for meta_file in sorted(RAW_DIR.glob("*.json")):
+def _rebuild_csv_export() -> None:
+    rows = []
+    for meta_file in RAW_DIR.glob("*.json"):
         try:
             d = json.loads(meta_file.read_text("utf-8"))
         except Exception:
             continue
 
-        nr = str(d.get("artikelnr") or meta_file.stem).strip()
-        if not nr or not _in_range(nr):
-            continue
+        nr = str(d.get("artikelnr") or meta_file.stem)
+        rows.append({
+            "ArtikelNr": nr,
+            "Menge": 1,
+            "Kategorie": d.get("kategorie", "") or "",
+            "Bezeichnung": d.get("titel", "") or "",
+            "Beschreibung": d.get("beschreibung", "") or "",
+            "Rufpreis": d.get("rufpreis", 0.0) or 0.0,
+            "Lagerstand": d.get("lagerstand", 1) or 1,
+            "Lagerort": d.get("lagerort", "") or "",
+            "Einlieferer": d.get("einlieferer", "") or "",
+            "Mitarbeiter": d.get("mitarbeiter", "") or "",
+            "RetailPreis": d.get("retail_price", 0.0) or 0.0,
+        })
 
-        menge = d.get("menge", 1)
-        lagerstand = d.get("lagerstand", 1)
-        uebernehmen = d.get("uebernehmen", 1)
-
-        # Einlieferer-ID: bevorzugt einlieferer_id, sonst einlieferer
-        einl = d.get("einlieferer_id", d.get("einlieferer", "")) or ""
-
-        # Angeliefert Datum (Freitext/Datumstring)
-        angel = d.get("angeliefert", "") or ""
-
-        betr = d.get("betriebsmittel", "") or ""
-
-        # Lagerort
-        lagerort = d.get("lagerort", "") or ""
-
-        # Bezeichnung/Beschreibung
-        bez = d.get("titel", "") or ""
-        beschr = d.get("beschreibung", "") or ""
-
-        # Preis: rufpreis (wie bisher im CSV gewünscht)
+    def _sort_key(r):
         try:
-            preis = float(d.get("rufpreis", 0.0) or 0.0)
+            return int(r["ArtikelNr"])
         except Exception:
-            preis = 0.0
-        preis_s = f"{preis:.1f}"  # Punkt + 1 Dezimal
+            return r["ArtikelNr"]
 
-        def _int1(v):
-            try:
-                return int(float(v))
-            except Exception:
-                return 1
+    rows.sort(key=_sort_key)
 
-        row = [
-            nr,
-            _int1(menge),
-            bez,
-            beschr,
-            preis_s,
-            lagerort,
-            _int1(lagerstand),
-            _int1(uebernehmen),
-            str(einl),
-            str(angel),
-            str(betr),
-        ]
-        w.writerow(row)
+    with EXPORT_CSV.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=CSV_FIELDS, delimiter=";")
+        w.writeheader()
+        for r in rows:
+            w.writerow(r)
 
-    # UTF-8 mit BOM
-    EXPORT_CSV.write_bytes(out.getvalue().encode("utf-8-sig"))
-    print("[CSV] Export aktualisiert:", str(EXPORT_CSV))
+    print("[CSV] Export aktualisiert:", EXPORT_CSV)
+
+
+# ----------------------------
+# KI (1 Versuch, kein Fallback, mit Kontext fürs 2. Foto)
+# ----------------------------
+def _run_meta_once(artikelnr: str, img_path: Path) -> Tuple[Optional[Dict[str, Any]], bool, str, int]:
+    """Return (meta, ok, error, runtime_ms)"""
+    try:
+        import ki_engine_openai as ki_engine
+    except Exception as e:
+        err = f"import_error: {e}"
+        print("[KI] Importfehler:", e)
+        return None, False, err, 0
+
+    current = _load_meta_json(artikelnr)
+
+    start = time.time()
+    try:
+        meta = ki_engine.generate_meta(str(img_path), str(artikelnr), context=current)
+        runtime_ms = int((time.time() - start) * 1000)
+
+        if not meta:
+            return None, False, "ki_failed", runtime_ms
+
+        title = (meta.get("title") or "").strip()
+        desc = (meta.get("description") or "").strip()
+        cat = (meta.get("category") or "").strip()
+
+        try:
+            retail = float(meta.get("retail_price", 0) or 0)
+        except Exception:
+            retail = 0.0
+
+        # OK nur wenn Titel + (Beschreibung ODER Preis)
+        if not title or (not desc and retail <= 0):
+            return None, False, "invalid_ki_result", runtime_ms
+
+        meta["title"] = title
+        meta["description"] = desc
+        meta["category"] = cat
+        meta["retail_price"] = retail
+        return meta, True, "", runtime_ms
+
+    except Exception as e:
+        runtime_ms = int((time.time() - start) * 1000)
+        err = str(e)
+        print("[KI] Fehler:", e)
+        return None, False, err, runtime_ms
 
 
 def _apply_ki_to_meta(mj: Dict[str, Any], meta: Dict[str, Any]) -> None:
@@ -371,63 +336,9 @@ def _run_meta_background(artikelnr: str, img_path: Path) -> None:
 # ----------------------------
 # Routes
 # ----------------------------
-
-@app.post("/api/delete_last_image")
-def delete_last_image(data: Dict[str, Any]):
-    artikelnr = str(data.get("artikelnr", "")).strip()
-    if not artikelnr:
-        return JSONResponse({"ok": False, "error": "artikelnr fehlt"}, status_code=400)
-
-    pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
-    if not pics:
-        return {"ok": True, "deleted": None}
-
-    last = pics[-1]
-    try:
-        last.unlink()
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-
-    # Update meta last_image if it was pointing to this file
-    mj = _load_meta_json(artikelnr)
-    li = str(mj.get("last_image") or "")
-    if li and Path(li).name == last.name:
-        mj["last_image"] = ""
-        _save_meta_json(artikelnr, mj)
-
-    return {"ok": True, "deleted": last.name}
-
-
 @app.get("/")
 def root():
     return FileResponse(str(BASE_DIR / "index.html"))
-
-
-
-@app.post("/api/delete_last_image")
-def delete_last_image(data: Dict[str, Any]):
-    artikelnr = str(data.get("artikelnr", "")).strip()
-    if not artikelnr:
-        return JSONResponse({"ok": False, "error": "artikelnr fehlt"}, status_code=400)
-
-    pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
-    if not pics:
-        return {"ok": True, "deleted": None}
-
-    last = pics[-1]
-    try:
-        last.unlink()
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-
-    # Update meta last_image if it was pointing to this file
-    mj = _load_meta_json(artikelnr)
-    li = str(mj.get("last_image") or "")
-    if li and Path(li).name == last.name:
-        mj["last_image"] = ""
-        _save_meta_json(artikelnr, mj)
-
-    return {"ok": True, "deleted": last.name}
 
 
 @app.get("/admin")
@@ -436,135 +347,21 @@ def admin_root():
 
 
 
-@app.post("/api/delete_last_image")
-def delete_last_image(data: Dict[str, Any]):
-    artikelnr = str(data.get("artikelnr", "")).strip()
-    if not artikelnr:
-        return JSONResponse({"ok": False, "error": "artikelnr fehlt"}, status_code=400)
-
-    pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
-    if not pics:
-        return {"ok": True, "deleted": None}
-
-    last = pics[-1]
-    try:
-        last.unlink()
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-
-    # Update meta last_image if it was pointing to this file
-    mj = _load_meta_json(artikelnr)
-    li = str(mj.get("last_image") or "")
-    if li and Path(li).name == last.name:
-        mj["last_image"] = ""
-        _save_meta_json(artikelnr, mj)
-
-    return {"ok": True, "deleted": last.name}
-
+@app.head("/")
+def head_root():
+    # Render/Health probes sometimes use HEAD. Return 200.
+    return Response(status_code=200)
 
 @app.get("/api/health")
 def health():
     return {"ok": True}
 
 
-@app.post("/api/delete_last_image")
-def delete_last_image(data: Dict[str, Any]):
-    artikelnr = str(data.get("artikelnr", "")).strip()
-    if not artikelnr:
-        return JSONResponse({"ok": False, "error": "artikelnr fehlt"}, status_code=400)
-
-    pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
-    if not pics:
-        return {"ok": True, "deleted": None}
-
-    last = pics[-1]
-    try:
-        last.unlink()
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-
-    # Update meta last_image if it was pointing to this file
-    mj = _load_meta_json(artikelnr)
-    li = str(mj.get("last_image") or "")
-    if li and Path(li).name == last.name:
-        mj["last_image"] = ""
-        _save_meta_json(artikelnr, mj)
-
-    return {"ok": True, "deleted": last.name}
-
-
-@app.head("/api/health")
-def health_head():
-    return {"ok": True}
-
-
-
-@app.post("/api/delete_last_image")
-def delete_last_image(data: Dict[str, Any]):
-    artikelnr = str(data.get("artikelnr", "")).strip()
-    if not artikelnr:
-        return JSONResponse({"ok": False, "error": "artikelnr fehlt"}, status_code=400)
-
-    pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
-    if not pics:
-        return {"ok": True, "deleted": None}
-
-    last = pics[-1]
-    try:
-        last.unlink()
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-
-    # Update meta last_image if it was pointing to this file
-    mj = _load_meta_json(artikelnr)
-    li = str(mj.get("last_image") or "")
-    if li and Path(li).name == last.name:
-        mj["last_image"] = ""
-        _save_meta_json(artikelnr, mj)
-
-    return {"ok": True, "deleted": last.name}
-
-
 @app.get("/api/export.csv")
-def export_csv(request: Request):
-    from_nr = (request.query_params.get("from_nr", "") or "").strip()
-    to_nr = (request.query_params.get("to_nr", "") or "").strip()
-
-    # Build filtered export if range is set, otherwise ensure file exists
-    _rebuild_csv_export(from_nr=from_nr, to_nr=to_nr)
-
-    return FileResponse(
-        str(EXPORT_CSV),
-        filename="artikel_export.csv",
-        media_type="text/csv",
-    )
-
-
-
-@app.post("/api/delete_last_image")
-def delete_last_image(data: Dict[str, Any]):
-    artikelnr = str(data.get("artikelnr", "")).strip()
-    if not artikelnr:
-        return JSONResponse({"ok": False, "error": "artikelnr fehlt"}, status_code=400)
-
-    pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
-    if not pics:
-        return {"ok": True, "deleted": None}
-
-    last = pics[-1]
-    try:
-        last.unlink()
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-
-    # Update meta last_image if it was pointing to this file
-    mj = _load_meta_json(artikelnr)
-    li = str(mj.get("last_image") or "")
-    if li and Path(li).name == last.name:
-        mj["last_image"] = ""
-        _save_meta_json(artikelnr, mj)
-
-    return {"ok": True, "deleted": last.name}
+def export_csv():
+    if not EXPORT_CSV.exists():
+        _rebuild_csv_export()
+    return FileResponse(str(EXPORT_CSV), filename="artikel_export.csv", media_type="text/csv")
 
 
 @app.get("/api/next_artikelnr")
@@ -580,65 +377,11 @@ def next_artikelnr():
     return {"ok": True, "next": max_nr + 1 if max_nr else 1}
 
 
-
-@app.post("/api/delete_last_image")
-def delete_last_image(data: Dict[str, Any]):
-    artikelnr = str(data.get("artikelnr", "")).strip()
-    if not artikelnr:
-        return JSONResponse({"ok": False, "error": "artikelnr fehlt"}, status_code=400)
-
-    pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
-    if not pics:
-        return {"ok": True, "deleted": None}
-
-    last = pics[-1]
-    try:
-        last.unlink()
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-
-    # Update meta last_image if it was pointing to this file
-    mj = _load_meta_json(artikelnr)
-    li = str(mj.get("last_image") or "")
-    if li and Path(li).name == last.name:
-        mj["last_image"] = ""
-        _save_meta_json(artikelnr, mj)
-
-    return {"ok": True, "deleted": last.name}
-
-
 @app.get("/api/check_artnr")
 def check_artnr(artikelnr: str):
     artikelnr = str(artikelnr).strip()
     exists = _meta_path(artikelnr).exists() or any(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
     return {"ok": True, "exists": bool(exists)}
-
-
-
-@app.post("/api/delete_last_image")
-def delete_last_image(data: Dict[str, Any]):
-    artikelnr = str(data.get("artikelnr", "")).strip()
-    if not artikelnr:
-        return JSONResponse({"ok": False, "error": "artikelnr fehlt"}, status_code=400)
-
-    pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
-    if not pics:
-        return {"ok": True, "deleted": None}
-
-    last = pics[-1]
-    try:
-        last.unlink()
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-
-    # Update meta last_image if it was pointing to this file
-    mj = _load_meta_json(artikelnr)
-    li = str(mj.get("last_image") or "")
-    if li and Path(li).name == last.name:
-        mj["last_image"] = ""
-        _save_meta_json(artikelnr, mj)
-
-    return {"ok": True, "deleted": last.name}
 
 
 @app.post("/api/upload")
@@ -682,33 +425,6 @@ async def upload(
     return {"ok": True, "filename": out.name}
 
 
-
-@app.post("/api/delete_last_image")
-def delete_last_image(data: Dict[str, Any]):
-    artikelnr = str(data.get("artikelnr", "")).strip()
-    if not artikelnr:
-        return JSONResponse({"ok": False, "error": "artikelnr fehlt"}, status_code=400)
-
-    pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
-    if not pics:
-        return {"ok": True, "deleted": None}
-
-    last = pics[-1]
-    try:
-        last.unlink()
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-
-    # Update meta last_image if it was pointing to this file
-    mj = _load_meta_json(artikelnr)
-    li = str(mj.get("last_image") or "")
-    if li and Path(li).name == last.name:
-        mj["last_image"] = ""
-        _save_meta_json(artikelnr, mj)
-
-    return {"ok": True, "deleted": last.name}
-
-
 @app.get("/api/images")
 def images(artikelnr: str):
     artikelnr = str(artikelnr).strip()
@@ -717,33 +433,6 @@ def images(artikelnr: str):
         rel = f.relative_to(BASE_DIR)
         files.append("/static/" + str(rel).replace("\\", "/"))
     return {"ok": True, "files": files}
-
-
-
-@app.post("/api/delete_last_image")
-def delete_last_image(data: Dict[str, Any]):
-    artikelnr = str(data.get("artikelnr", "")).strip()
-    if not artikelnr:
-        return JSONResponse({"ok": False, "error": "artikelnr fehlt"}, status_code=400)
-
-    pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
-    if not pics:
-        return {"ok": True, "deleted": None}
-
-    last = pics[-1]
-    try:
-        last.unlink()
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-
-    # Update meta last_image if it was pointing to this file
-    mj = _load_meta_json(artikelnr)
-    li = str(mj.get("last_image") or "")
-    if li and Path(li).name == last.name:
-        mj["last_image"] = ""
-        _save_meta_json(artikelnr, mj)
-
-    return {"ok": True, "deleted": last.name}
 
 
 @app.post("/api/delete_image")
@@ -776,33 +465,6 @@ def delete_image(payload: Dict[str, Any]):
     return {"ok": True}
 
 
-
-@app.post("/api/delete_last_image")
-def delete_last_image(data: Dict[str, Any]):
-    artikelnr = str(data.get("artikelnr", "")).strip()
-    if not artikelnr:
-        return JSONResponse({"ok": False, "error": "artikelnr fehlt"}, status_code=400)
-
-    pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
-    if not pics:
-        return {"ok": True, "deleted": None}
-
-    last = pics[-1]
-    try:
-        last.unlink()
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-
-    # Update meta last_image if it was pointing to this file
-    mj = _load_meta_json(artikelnr)
-    li = str(mj.get("last_image") or "")
-    if li and Path(li).name == last.name:
-        mj["last_image"] = ""
-        _save_meta_json(artikelnr, mj)
-
-    return {"ok": True, "deleted": last.name}
-
-
 @app.get("/api/meta")
 def meta(artikelnr: str):
     artikelnr = str(artikelnr).strip()
@@ -833,34 +495,6 @@ def meta(artikelnr: str):
     }
 
 
-
-@app.post("/api/delete_last_image")
-def delete_last_image(data: Dict[str, Any]):
-    artikelnr = str(data.get("artikelnr", "")).strip()
-    if not artikelnr:
-        return JSONResponse({"ok": False, "error": "artikelnr fehlt"}, status_code=400)
-
-    pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
-    if not pics:
-        return {"ok": True, "deleted": None}
-
-    last = pics[-1]
-    try:
-        last.unlink()
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-
-    # Update meta last_image if it was pointing to this file
-    mj = _load_meta_json(artikelnr)
-    li = str(mj.get("last_image") or "")
-    if li and Path(li).name == last.name:
-        mj["last_image"] = ""
-        _save_meta_json(artikelnr, mj)
-
-    return {"ok": True, "deleted": last.name}
-
-
-
 @app.post("/api/save")
 def save(data: Dict[str, Any]):
     artikelnr = str(data.get("artikelnr", "")).strip()
@@ -868,92 +502,15 @@ def save(data: Dict[str, Any]):
         return JSONResponse({"ok": False, "error": "Artikelnummer fehlt"}, status_code=400)
 
     mj = _load_meta_json(artikelnr)
-
-    # Textfelder
-    for k in ["titel", "beschreibung", "lagerort", "kategorie", "betriebsmittel"]:
+    for k in ["titel", "beschreibung", "lagerort", "einlieferer", "mitarbeiter", "kategorie"]:
         if k in data and data[k] is not None:
             mj[k] = str(data[k])
-
-    # Einlieferer + Mitarbeiter
-    if "einlieferer_id" in data and data["einlieferer_id"] is not None:
-        mj["einlieferer_id"] = str(data["einlieferer_id"])
-        mj["einlieferer"] = str(data["einlieferer_id"])
-    if "einlieferer" in data and data["einlieferer"] is not None:
-        mj["einlieferer"] = str(data["einlieferer"])
-    if "mitarbeiter" in data and data["mitarbeiter"] is not None:
-        mj["mitarbeiter"] = str(data["mitarbeiter"])
-
-    # Zahlenfelder (Defaults aus Settings)
-    def _to_int(v, default=1):
-        try:
-            if v is None or v == "":
-                return default
-            return int(float(v))
-        except Exception:
-            return default
-
-    mj["menge"] = _to_int(data.get("menge", mj.get("menge", 1)), 1)
-    mj["lagerstand"] = _to_int(data.get("lagerstand", mj.get("lagerstand", 1)), 1)
-    mj["uebernehmen"] = _to_int(data.get("uebernehmen", mj.get("uebernehmen", 1)), 1)
-
-    # Datum
-    if "angeliefert" in data and data["angeliefert"] is not None:
-        mj["angeliefert"] = str(data["angeliefert"])
-
-    # Preis-System
-    price_enabled = data.get("price_system_enabled", True)
-    mj["price_system_enabled"] = bool(price_enabled) if not isinstance(price_enabled, str) else (price_enabled.lower() not in ["false", "0", "no"])
-
-    def _to_float(v, default=0.0):
-        try:
-            if v is None or v == "":
-                return default
-            return float(v)
-        except Exception:
-            return default
-
-    if mj.get("price_system_enabled", True):
-        mj["retail_price"] = _to_float(data.get("retail_price", mj.get("retail_price", 0.0)), 0.0)
-        mj["rufpreis"] = _to_float(data.get("rufpreis", mj.get("rufpreis", 0.0)), 0.0)
-    else:
-        mj["retail_price"] = 0.0
-        mj["rufpreis"] = 1.0
-
     if "reviewed" in data:
         mj["reviewed"] = bool(data.get("reviewed", False))
 
     _save_meta_json(artikelnr, mj)
-
-    # CSV neu bauen (einheitlich, Excel-freundlich)
     _rebuild_csv_export()
-
     return {"ok": True}
-
-
-@app.post("/api/delete_last_image")
-def delete_last_image(data: Dict[str, Any]):
-    artikelnr = str(data.get("artikelnr", "")).strip()
-    if not artikelnr:
-        return JSONResponse({"ok": False, "error": "artikelnr fehlt"}, status_code=400)
-
-    pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
-    if not pics:
-        return {"ok": True, "deleted": None}
-
-    last = pics[-1]
-    try:
-        last.unlink()
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-
-    # Update meta last_image if it was pointing to this file
-    mj = _load_meta_json(artikelnr)
-    li = str(mj.get("last_image") or "")
-    if li and Path(li).name == last.name:
-        mj["last_image"] = ""
-        _save_meta_json(artikelnr, mj)
-
-    return {"ok": True, "deleted": last.name}
 
 
 @app.get("/api/describe")
@@ -1009,33 +566,6 @@ def describe(artikelnr: str):
 # ----------------------------
 # Admin API (Token geschützt)
 # ----------------------------
-
-@app.post("/api/delete_last_image")
-def delete_last_image(data: Dict[str, Any]):
-    artikelnr = str(data.get("artikelnr", "")).strip()
-    if not artikelnr:
-        return JSONResponse({"ok": False, "error": "artikelnr fehlt"}, status_code=400)
-
-    pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
-    if not pics:
-        return {"ok": True, "deleted": None}
-
-    last = pics[-1]
-    try:
-        last.unlink()
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-
-    # Update meta last_image if it was pointing to this file
-    mj = _load_meta_json(artikelnr)
-    li = str(mj.get("last_image") or "")
-    if li and Path(li).name == last.name:
-        mj["last_image"] = ""
-        _save_meta_json(artikelnr, mj)
-
-    return {"ok": True, "deleted": last.name}
-
-
 @app.get("/api/admin/budget")
 def admin_budget(request: Request):
     guard = _admin_guard(request)
@@ -1058,33 +588,6 @@ def admin_budget(request: Request):
         "last_success_at": int(u.get("last_success_at", 0)),
         "last_error": u.get("last_error", "") or "",
     }
-
-
-
-@app.post("/api/delete_last_image")
-def delete_last_image(data: Dict[str, Any]):
-    artikelnr = str(data.get("artikelnr", "")).strip()
-    if not artikelnr:
-        return JSONResponse({"ok": False, "error": "artikelnr fehlt"}, status_code=400)
-
-    pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
-    if not pics:
-        return {"ok": True, "deleted": None}
-
-    last = pics[-1]
-    try:
-        last.unlink()
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-
-    # Update meta last_image if it was pointing to this file
-    mj = _load_meta_json(artikelnr)
-    li = str(mj.get("last_image") or "")
-    if li and Path(li).name == last.name:
-        mj["last_image"] = ""
-        _save_meta_json(artikelnr, mj)
-
-    return {"ok": True, "deleted": last.name}
 
 
 @app.get("/api/admin/articles")
@@ -1136,20 +639,3 @@ def admin_articles(request: Request, category: str = "", only_failed: int = 0):
 
     items.sort(key=_sort_key)
     return {"ok": True, "items": items}
-
-
-# =====================================================
-# Server Start (WICHTIG für Render)
-# =====================================================
-if __name__ == "__main__":
-    import os
-    import uvicorn
-
-    port = int(os.environ.get("PORT", "10000"))
-    print(f"[START] Server läuft auf Port {port}")
-    uvicorn.run(
-        "server_full:app",
-        host="0.0.0.0",
-        port=port,
-        log_level="info",
-    )
