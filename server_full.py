@@ -349,11 +349,15 @@ def admin_root():
 
 @app.head("/")
 def head_root():
-    # Render/Health probes sometimes use HEAD. Return 200.
+    # Render probes sometimes use HEAD /
     return Response(status_code=200)
 
 @app.get("/api/health")
 def health():
+    return {"ok": True}
+
+@app.head("/api/health")
+def health_head():
     return {"ok": True}
 
 
