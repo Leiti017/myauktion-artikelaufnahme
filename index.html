@@ -34,6 +34,7 @@
     .btn{padding:.55rem 1rem;border-radius:999px;font-weight:700;display:inline-flex;align-items:center;gap:.45rem}
     .btn-primary{background:#fff;color:#0f172a;box-shadow:0 8px 18px rgba(0,0,0,.2)}
     .btn-ghost{color:#fff;border:1px solid rgba(255,255,255,.35);background:transparent}
+    .btn-danger{color:#fff;border:1px solid rgba(239,68,68,.85);background:rgba(239,68,68,.22)}
     .input, select{
       width:100%;padding:.55rem .9rem;border-radius:.75rem;background:rgba(255,255,255,.96);
       color:#0f172a;outline:none;border:1px solid transparent;font-size:.9rem
@@ -84,7 +85,7 @@
       <section>
         <div class="flex items-center justify-between mb-2">
           <h2 class="text-lg font-semibold">1. Artikel erfassen</h2>
-          <button id="btn-settings" class="btn btn-ghost text-xs">⚙️ Einstellungen</button>
+          <button id="btn-settings" type="button" class="btn btn-ghost text-xs">⚙️ Einstellungen</button>
         </div>
 
         <!-- ⚙️ EINSTELLUNGEN -->
@@ -161,9 +162,7 @@
           <span class="text-xs text-white/70 text-center">Tippen, um Foto aufzunehmen / auszuwählen</span>
         </div>
 
-        <div class="flex gap-2 mb-3">
-          <button id="btn-toggle-retail" type="button" class="btn btn-ghost text-[11px]">Listenpreis ausblenden</button>
-        </div>
+        <!-- (Listenpreis-Button ist rechts beim Preis-System) -->
 
         <div class="img-strip flex gap-2 overflow-x-auto pb-1" id="img-strip"></div>
 
@@ -215,8 +214,9 @@
           </div>
         </div>
 
-        <div class="flex justify-end mb-3">
+        <div class="flex justify-end gap-2 mb-3 flex-wrap">
           <button id="btn-price-toggle" class="btn btn-ghost text-[11px]" type="button">Preis-System ausschalten</button>
+          <button id="btn-toggle-retail" class="btn btn-ghost text-[11px]" type="button">Listenpreis ausblenden</button>
         </div>
 
         <label class="block mb-1 text-xs opacity-80">System-Log</label>
@@ -309,11 +309,8 @@
 
   function applySettingsToUI(){
     const s = loadSettings();
-    // Menge kommt jetzt direkt aus der Hauptmaske
-    const mengeVal = parseInt((fMenge?.value)||String(s.menge ?? 1), 10) || 1;
     sEinl.value = s.einlieferer_id || "22";
     sMit.value = s.mitarbeiter || "Jan";
-    sMenge.value = String(s.menge ?? 1);
     sLagerstand.value = String(s.lagerstand ?? 1);
     sUebernehmen.value = String(s.uebernehmen ?? 1);
     sAngeliefert.value = s.angeliefert || "";
@@ -348,11 +345,16 @@
 
     if(btnPriceToggle){
       btnPriceToggle.textContent = enabled ? "Preis-System ausschalten" : "Preis-System einschalten";
+      btnPriceToggle.classList.toggle('btn-danger', !enabled);
+      btnPriceToggle.classList.toggle('btn-ghost', enabled);
     }
     if(btnToggleRetail){
       // Button nur sinnvoll, wenn Preis-System AN ist
       btnToggleRetail.classList.toggle("hidden", !enabled);
       btnToggleRetail.textContent = hideRetail ? "Listenpreis einblenden" : "Listenpreis ausblenden";
+      // rot, wenn Listenpreis gerade AUSGEBLENDET ist
+      btnToggleRetail.classList.toggle('btn-danger', enabled && hideRetail);
+      btnToggleRetail.classList.toggle('btn-ghost', !(enabled && hideRetail));
     }
 
     const retailVisible = (enabled && !hideRetail);
