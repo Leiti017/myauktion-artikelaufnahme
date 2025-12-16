@@ -72,6 +72,82 @@ PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 EXPORT_CSV = EXPORT_DIR / "artikel_export.csv"
+
+
+# ----------------------------
+# CSV Export helpers (UTF-8 BOM + schneller Update)
+# ----------------------------
+CSV_HEADERS = ["ArtikelNr","Menge","Bezeichnung","Beschreibung","Preis","Lagerort","Lagerstand","uebernehmen","Einlieferer-ID","angeliefert","Betriebsmittel"]
+
+def _format_price_1dp(val: Any) -> str:
+    try:
+        f = float(val or 0)
+    except Exception:
+        f = 0.0
+    return f"{f:.1f}"
+
+def _ensure_export_csv_exists() -> None:
+    if not EXPORT_CSV.exists():
+        _rebuild_csv_export()
+        # rewrite once with BOM + correct header order if needed
+        try:
+            txt = EXPORT_CSV.read_text("utf-8")
+            EXPORT_CSV.write_bytes(("\ufeff" + txt).encode("utf-8"))
+        except Exception:
+            pass
+
+def _update_csv_row_for_art(artikelnr: str, meta: Dict[str, Any]) -> None:
+    """Update one row in export CSV without rebuilding everything."""
+    _ensure_export_csv_exists()
+
+    # Load existing rows
+    import csv, io
+    raw = EXPORT_CSV.read_bytes()
+    # strip BOM if present
+    if raw.startswith(b"\xef\xbb\xbf"):
+        raw = raw[3:]
+    text = raw.decode("utf-8", errors="replace")
+    rdr = csv.reader(io.StringIO(text))
+    rows = list(rdr)
+
+    # Ensure headers
+    if not rows:
+        rows = [CSV_HEADERS]
+    else:
+        rows[0] = CSV_HEADERS
+
+    # Build new row
+    art = str(artikelnr)
+    menge = int(meta.get("menge") or 1)
+    titel = str(meta.get("titel") or "")
+    beschr = str(meta.get("beschreibung") or "")
+    preis = _format_price_1dp(meta.get("rufpreis", 0))
+    lagerort = str(meta.get("lagerort") or "")
+    lagerstand = int(meta.get("lagerstand") or 1)
+    uebernehmen = int(meta.get("uebernehmen") or 1)
+    einl = str(meta.get("einlieferer_id") or meta.get("einlieferer") or "")
+    angel = str(meta.get("angeliefert") or "")
+    betr = str(meta.get("betriebsmittel") or "")
+    new_row = [art, str(menge), titel, beschr, preis, lagerort, str(lagerstand), str(uebernehmen), einl, angel, betr]
+
+    # Replace or append
+    out_rows = [rows[0]]
+    replaced = False
+    for r in rows[1:]:
+        if len(r) > 0 and r[0] == art:
+            out_rows.append(new_row)
+            replaced = True
+        else:
+            out_rows.append(r)
+    if not replaced:
+        out_rows.append(new_row)
+
+    # Write back with BOM
+    bio = io.StringIO()
+    w = csv.writer(bio, delimiter=",", quotechar='"', quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
+    for r in out_rows:
+        w.writerow(r)
+    EXPORT_CSV.write_bytes(("\ufeff" + bio.getvalue()).encode("utf-8"))
 USAGE_JSON = EXPORT_DIR / "ki_usage.json"
 
 # Admin-Schutz (frei wählbar, NICHT OpenAI-Key)
@@ -195,16 +271,17 @@ def _usage_fail(err: str) -> None:
 CSV_FIELDS = [
     "ArtikelNr",
     "Menge",
+    "Kategorie",
     "Bezeichnung",
     "Beschreibung",
-    "Preis",
-    "Lagerort",
+    "Rufpreis",
     "Lagerstand",
-    "uebernehmen",
-    "Einlieferer-ID",
-    "angeliefert",
-    "Betriebsmittel",
+    "Lagerort",
+    "Einlieferer",
+    "Mitarbeiter",
+    "RetailPreis",
 ]
+
 
 def _rebuild_csv_export() -> None:
     rows = []
@@ -350,13 +427,64 @@ def health():
     return {"ok": True}
 
 
-
 @app.get("/api/export.csv")
-def export_csv(from_nr: Optional[int] = None, to_nr: Optional[int] = None):
-    data = _build_export_csv_bytes(from_nr=from_nr, to_nr=to_nr)
-    headers = {"Content-Disposition": 'attachment; filename="artikel_export.csv"'}
-    return Response(content=data, media_type="text/csv; charset=utf-8", headers=headers)
+def export_csv(from_nr: str | None = None, to_nr: str | None = None):
+    """
+    Export CSV (UTF-8 mit BOM für Excel). Optionaler Bereich:
+      /api/export.csv?from_nr=123458&to_nr=123480
+    """
+    _ensure_export_csv_exists()
 
+    # Kein Filter -> Datei direkt ausliefern
+    if not from_nr and not to_nr:
+        return FileResponse(str(EXPORT_CSV), filename="artikel_export.csv", media_type="text/csv")
+
+    # Filter -> in-memory CSV erzeugen
+    def _in_range(n: str) -> bool:
+        try:
+            ni = int(n)
+        except Exception:
+            return False
+        if from_nr:
+            try:
+                if ni < int(from_nr): return False
+            except Exception:
+                pass
+        if to_nr:
+            try:
+                if ni > int(to_nr): return False
+            except Exception:
+                pass
+        return True
+
+    import io, csv
+    rows = []
+    for jf in sorted(RAW_DIR.glob("*.json")):
+        art = jf.stem
+        if not _in_range(art):
+            continue
+        meta = _load_meta_json(art)
+        rows.append([
+            art,
+            str(int(meta.get("menge") or 1)),
+            str(meta.get("titel") or ""),
+            str(meta.get("beschreibung") or ""),
+            _format_price_1dp(meta.get("rufpreis", 0)),
+            str(meta.get("lagerort") or ""),
+            str(int(meta.get("lagerstand") or 1)),
+            str(int(meta.get("uebernehmen") or 1)),
+            str(meta.get("einlieferer_id") or meta.get("einlieferer") or ""),
+            str(meta.get("angeliefert") or ""),
+            str(meta.get("betriebsmittel") or ""),
+        ])
+
+    bio = io.StringIO()
+    w = csv.writer(bio, delimiter=",", quotechar='"', quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
+    w.writerow(CSV_HEADERS)
+    for r in rows:
+        w.writerow(r)
+    content = ("\ufeff" + bio.getvalue()).encode("utf-8")
+    return Response(content, media_type="text/csv", headers={"Content-Disposition":"attachment; filename=artikel_export.csv"})
 
 
 @app.get("/api/next_artikelnr")
@@ -430,6 +558,30 @@ def images(artikelnr: str):
     return {"ok": True, "files": files}
 
 
+
+@app.post("/api/delete_last_image")
+def delete_last_image(data: Dict[str, Any]):
+    artikelnr = str(data.get("artikelnr", "")).strip()
+    if not artikelnr:
+        return JSONResponse({"ok": False, "error": "Artikelnummer fehlt"}, status_code=400)
+
+    files = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
+    if not files:
+        return JSONResponse({"ok": False, "error": "Keine Bilder vorhanden"}, status_code=404)
+
+    target = files[-1]
+    try:
+        target.unlink()
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"Konnte Bild nicht löschen: {e}"}, status_code=500)
+
+    # meta last_image aktualisieren
+    mj = _load_meta_json(artikelnr)
+    mj["last_image"] = files[-2].name if len(files) >= 2 else ""
+    _save_meta_json(artikelnr, mj)
+
+    return {"ok": True, "deleted": target.name}
+
 @app.post("/api/delete_image")
 def delete_image(payload: Dict[str, Any]):
     artikelnr = str(payload.get("artikelnr", "")).strip()
@@ -497,14 +649,40 @@ def save(data: Dict[str, Any]):
         return JSONResponse({"ok": False, "error": "Artikelnummer fehlt"}, status_code=400)
 
     mj = _load_meta_json(artikelnr)
+
+    # Textfelder
     for k in ["titel", "beschreibung", "lagerort", "einlieferer", "mitarbeiter", "kategorie"]:
         if k in data and data[k] is not None:
             mj[k] = str(data[k])
+
+    # Settings-Felder (für CSV Export)
+    if "menge" in data: mj["menge"] = int(data.get("menge") or 1)
+    if "lagerstand" in data: mj["lagerstand"] = int(data.get("lagerstand") or 1)
+    if "uebernehmen" in data: mj["uebernehmen"] = int(data.get("uebernehmen") or 1)
+    if "einlieferer_id" in data: mj["einlieferer_id"] = str(data.get("einlieferer_id") or "")
+    if "angeliefert" in data: mj["angeliefert"] = str(data.get("angeliefert") or "")
+    if "betriebsmittel" in data: mj["betriebsmittel"] = str(data.get("betriebsmittel") or "")
+
+    # Preise (falls manuell angepasst)
+    if "retail_price" in data:
+        try: mj["retail_price"] = float(data.get("retail_price") or 0)
+        except Exception: mj["retail_price"] = 0.0
+    if "rufpreis" in data:
+        try: mj["rufpreis"] = float(data.get("rufpreis") or 0)
+        except Exception: mj["rufpreis"] = 0.0
+
     if "reviewed" in data:
         mj["reviewed"] = bool(data.get("reviewed", False))
 
     _save_meta_json(artikelnr, mj)
-    _rebuild_csv_export()
+
+    # Schnell: nur diese eine Zeile in CSV updaten
+    try:
+        _update_csv_row_for_art(artikelnr, mj)
+    except Exception:
+        # Fallback: wenn irgendwas schiefgeht, einmal komplett rebuild
+        _rebuild_csv_export()
+
     return {"ok": True}
 
 
@@ -634,3 +812,10 @@ def admin_articles(request: Request, category: str = "", only_failed: int = 0):
 
     items.sort(key=_sort_key)
     return {"ok": True, "items": items}
+
+
+if __name__ == "__main__":
+    import os
+    import uvicorn
+    port = int(os.environ.get("PORT", "10000"))
+    uvicorn.run("server_full:app", host="0.0.0.0", port=port)
