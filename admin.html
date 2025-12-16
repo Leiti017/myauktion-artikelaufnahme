@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="de">
 <head>
-    <!-- build:20251215_062635 -->
+    <!-- build:ADMIN_EXPORT_RANGE_20251216_055837 -->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
@@ -10,7 +10,26 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>MyAuktion Admin • 20251215_062635</title>
   <link rel="icon" type="image/x-icon" href="/static/my_icon.ico">
-  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.tailwindcss.com">
+  // Export Bereich
+  const expFrom = document.getElementById('exp-from');
+  const expTo   = document.getElementById('exp-to');
+  const btnExpRange = document.getElementById('btn-export-range');
+
+  function updateExportRangeLink(){
+    const a = (expFrom?.value || "").trim();
+    const b = (expTo?.value || "").trim();
+    let url = "/api/export.csv";
+    const qs = [];
+    if(a) qs.push("from_nr=" + encodeURIComponent(a));
+    if(b) qs.push("to_nr=" + encodeURIComponent(b));
+    if(qs.length) url += "?" + qs.join("&");
+    if(btnExpRange) btnExpRange.href = url;
+  }
+  expFrom && expFrom.addEventListener('input', updateExportRangeLink);
+  expTo && expTo.addEventListener('input', updateExportRangeLink);
+  updateExportRangeLink();
+</script>
   <style>
     body{min-height:100vh;background:linear-gradient(135deg,#0ea5e9,#1d4ed8 60%,#1e293b);color:#fff}
     .glass{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.16);backdrop-filter:blur(12px)}
@@ -55,15 +74,22 @@
           <div class="text-lg font-bold">KI Budget (geschätzt)</div>
           <div class="text-xs opacity-80">Schätzung basiert auf erfolgreichen KI-Aufrufen (fixer €/Call). OpenAI-Hardlimit steuerst du im Dashboard.</div>
         </div>
-        <div class="flex flex-wrap items-center gap-2">
-          <a href="/api/export.csv" class="btn btn-primary">CSV (alle) downloaden</a>
-
-          <div class="glass rounded-xl p-2 flex items-center gap-2">
-            <span class="text-xs opacity-80">Von</span>
-            <input id="exp-from" type="number" class="input !w-32" placeholder="123458">
-            <span class="text-xs opacity-80">Bis</span>
-            <input id="exp-to" type="number" class="input !w-32" placeholder="123480">
-            <button id="btn-export-range" class="btn btn-ghost">Bereich exportieren</button>
+        <div class="flex gap-2">
+          
+          <div class="flex flex-col gap-2">
+            <div class="flex gap-2 items-end flex-wrap">
+              <div style="min-width:140px">
+                <div class="text-xs opacity-80 mb-1">Von ArtikelNr</div>
+                <input id="exp-from" class="input" placeholder="z.B. 123458" inputmode="numeric">
+              </div>
+              <div style="min-width:140px">
+                <div class="text-xs opacity-80 mb-1">Bis ArtikelNr</div>
+                <input id="exp-to" class="input" placeholder="z.B. 123480" inputmode="numeric">
+              </div>
+              <a id="btn-export-all" href="/api/export.csv" class="btn btn-primary">Alle exportieren</a>
+              <a id="btn-export-range" href="/api/export.csv" class="btn btn-primary">Bereich exportieren</a>
+            </div>
+            <div class="text-[11px] opacity-80">Tipp: Leer lassen = alle. (Von/Bis inkl.)</div>
           </div>
 
           <button id="btn-refresh" class="btn btn-primary">Refresh</button>
@@ -168,9 +194,6 @@
   const fFailed = document.getElementById('f-failed');
   const fQ = document.getElementById('f-q');
   const btnRefresh = document.getElementById('btn-refresh');
-  const expFrom = document.getElementById('exp-from');
-  const expTo = document.getElementById('exp-to');
-  const btnExportRange = document.getElementById('btn-export-range');
 
 function getToken(){
   // Safari/Privatmodus kann localStorage zicken -> zusätzlich Token per URL erlauben
@@ -281,6 +304,25 @@ function setToken(t){
   fQ.oninput = ()=> init();
 
   init();
+
+  // Export Bereich
+  const expFrom = document.getElementById('exp-from');
+  const expTo   = document.getElementById('exp-to');
+  const btnExpRange = document.getElementById('btn-export-range');
+
+  function updateExportRangeLink(){
+    const a = (expFrom?.value || "").trim();
+    const b = (expTo?.value || "").trim();
+    let url = "/api/export.csv";
+    const qs = [];
+    if(a) qs.push("from_nr=" + encodeURIComponent(a));
+    if(b) qs.push("to_nr=" + encodeURIComponent(b));
+    if(qs.length) url += "?" + qs.join("&");
+    if(btnExpRange) btnExpRange.href = url;
+  }
+  expFrom && expFrom.addEventListener('input', updateExportRangeLink);
+  expTo && expTo.addEventListener('input', updateExportRangeLink);
+  updateExportRangeLink();
 </script>
 </body>
 </html>
