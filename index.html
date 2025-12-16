@@ -217,7 +217,31 @@
           </div>
         </div>
 
-        <label class="block mb-1 text-xs opacity-80">System-Log</label>
+        
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+          <div>
+            <label class="block mb-1 text-xs opacity-80">Sortiment</label>
+            <input id="f-sortiment" type="text" class="input" placeholder="z.B. Haushalt, Werkzeuge …">
+          </div>
+          <div>
+            <label class="block mb-1 text-xs opacity-80">Kategorie</label>
+            <select id="f-kategorie" class="input">
+              <option value=""></option>
+              <option>Parfum</option>
+              <option>Kosmetik</option>
+              <option>Werkzeug</option>
+              <option>Elektronik</option>
+              <option>Haushalt</option>
+              <option>Kleidung</option>
+              <option>Schmuck/Uhren</option>
+              <option>Spielzeug</option>
+              <option>Bücher/Medien</option>
+              <option>Sonstiges</option>
+            </select>
+          </div>
+        </div>
+
+<label class="block mb-1 text-xs opacity-80">System-Log</label>
         <div id="log" class="text-[11px] text-slate-900 bg-white/90 rounded-xl p-2 max-h-40 overflow-y-auto"></div>
 
         <div class="text-[10px] text-white/70 mt-3">build: LIVE_SETTINGS_PRICE_VISUAL</div>
@@ -239,6 +263,8 @@
   const fDesc = document.getElementById('f-desc');
   const fRetail = document.getElementById('f-retail');
   const fRuf = document.getElementById('f-ruf');
+  const fSortiment = document.getElementById('f-sortiment');
+  const fKategorie = document.getElementById('f-kategorie');
 
   const btnPhoto = document.getElementById('btn-photo');
   const btnDeletePhoto = document.getElementById('btn-delete-photo');
@@ -399,6 +425,8 @@
     fDesc.value  = j.beschreibung || "";
     fRetail.value = (j.retail_price ?? "");
     fRuf.value    = (j.rufpreis ?? "");
+    if(fSortiment) fSortiment.value = (j.sortiment ?? "");
+    if(fKategorie) fKategorie.value = (j.kategorie ?? "");
     applyPriceMode();
 
     if(j.image){
@@ -524,6 +552,7 @@
     fDesc.value = j.description || "";
     fRetail.value = (j.retail_price ?? "");
     fRuf.value = (j.rufpreis ?? "");
+    if(fKategorie) fKategorie.value = (j.category ?? j.kategorie ?? "");
     applyPriceMode();
     setPill(false);
     toast("KI übernommen");
@@ -574,6 +603,8 @@
 
       titel: (fTitle.value||"").trim(),
       beschreibung: (fDesc.value||"").trim(),
+      kategorie: (fKategorie && fKategorie.value ? fKategorie.value : ""),
+      sortiment: (fSortiment && fSortiment.value ? fSortiment.value : ""),
       reviewed: false
     };
 

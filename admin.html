@@ -69,40 +69,12 @@
       <input id="export-to" class="input" type="number" placeholder="z.B. 123480">
     </div>
     <div class="flex items-end gap-2">
-      <button id="btn-export-range" class="btn btn-primary text-sm" type="button">Bereich exportieren</button>
-      <a href="/api/export.csv" id="btn-export-all" class="btn btn-primary">Alle export</a>
+      <button id="btn-export-range" class="btn btn-primary w-full sm:w-auto" type="button">CSV exportieren</button>
     </div>
   </div>
   <div class="text-[11px] opacity-70 mt-2">Leer lassen = kompletter Export.</div>
 </div>
 </div>
-      </div>
-
-      <div class="grid md:grid-cols-5 gap-3 mt-4">
-        <div class="glass rounded-2xl p-3">
-          <div class="text-xs opacity-80">Budget</div>
-          <div id="b-budget" class="text-xl font-extrabold">–</div>
-        </div>
-        <div class="glass rounded-2xl p-3">
-          <div class="text-xs opacity-80">Verbraucht</div>
-          <div id="b-spent" class="text-xl font-extrabold">–</div>
-        </div>
-        <div class="glass rounded-2xl p-3">
-          <div class="text-xs opacity-80">Rest</div>
-          <div id="b-remaining" class="text-xl font-extrabold">–</div>
-        </div>
-        <div class="glass rounded-2xl p-3">
-          <div class="text-xs opacity-80">KI Success</div>
-          <div id="b-success" class="text-xl font-extrabold">–</div>
-        </div>
-        <div class="glass rounded-2xl p-3">
-          <div class="text-xs opacity-80">KI Fail</div>
-          <div id="b-fail" class="text-xl font-extrabold">–</div>
-        </div>
-      </div>
-
-      <div class="text-xs opacity-80 mt-3">
-        Letzter Fehler: <span id="b-lasterr" class="opacity-95">–</span>
       </div>
     </section>
 
@@ -157,6 +129,55 @@
     </section>
   </div>
 </div>
+    <section class="glass rounded-3xl p-5 shadow-xl mt-5">
+      <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+        <div>
+          <div class="text-lg font-bold">KI Budget (geschätzt)</div>
+          <div class="text-xs opacity-80">Extra geschützt: bitte Passwort erneut eingeben. Schätzung basiert auf erfolgreichen KI-Aufrufen (fixer €/Call). OpenAI-Hardlimit steuerst du im Dashboard.</div>
+        </div>
+      </div>
+
+      <div id="budget-locked" class="glass rounded-2xl p-4 mt-4">
+        <div class="text-sm font-semibold mb-2">Budget freischalten</div>
+        <div class="grid md:grid-cols-3 gap-3 items-end">
+          <div class="md:col-span-2">
+            <label class="text-xs opacity-80">Budget-Passwort</label>
+            <input id="budget-token" class="input" placeholder="Passwort erneut eingeben…">
+          </div>
+          <button id="btn-budget-unlock" class="btn btn-primary w-full">Budget anzeigen</button>
+        </div>
+      </div>
+
+      <div id="budget-content" class="hidden">
+        <div class="grid md:grid-cols-5 gap-3 mt-4">
+          <div class="glass rounded-2xl p-3">
+            <div class="text-xs opacity-80">Budget</div>
+            <div id="b-budget" class="text-xl font-extrabold">–</div>
+          </div>
+          <div class="glass rounded-2xl p-3">
+            <div class="text-xs opacity-80">Verbraucht</div>
+            <div id="b-spent" class="text-xl font-extrabold">–</div>
+          </div>
+          <div class="glass rounded-2xl p-3">
+            <div class="text-xs opacity-80">Rest</div>
+            <div id="b-remaining" class="text-xl font-extrabold">–</div>
+          </div>
+          <div class="glass rounded-2xl p-3">
+            <div class="text-xs opacity-80">KI Success</div>
+            <div id="b-success" class="text-xl font-extrabold">–</div>
+          </div>
+          <div class="glass rounded-2xl p-3">
+            <div class="text-xs opacity-80">KI Fail</div>
+            <div id="b-fail" class="text-xl font-extrabold">–</div>
+          </div>
+        </div>
+
+        <div class="text-xs opacity-80 mt-3">
+          Letzter Fehler: <span id="b-lasterr" class="opacity-95">–</span>
+        </div>
+      </div>
+    </section>
+
 
 <script>
   const locked = document.getElementById('locked');
@@ -170,6 +191,13 @@
   const bSuccess = document.getElementById('b-success');
   const bFail = document.getElementById('b-fail');
   const bLastErr = document.getElementById('b-lasterr');
+
+  const budgetLocked = document.getElementById('budget-locked');
+  const budgetContent = document.getElementById('budget-content');
+  const budgetTokenInp = document.getElementById('budget-token');
+  const btnBudgetUnlock = document.getElementById('btn-budget-unlock');
+
+  let budgetUnlocked = false;
 
   const rowsEl = document.getElementById('rows');
   const fCat = document.getElementById('f-cat');
@@ -236,13 +264,7 @@ function setToken(t){
     }).join("");
   }
 
-  async function refresh(){
-    const cat = (fCat.value || "").trim();
-    const only_failed = fFailed.value || "0";
-    const qs = new URLSearchParams();
-    if(cat) qs.set("category", cat);
-    if(only_failed === "1") qs.set("only_failed", "1");
-
+  async function loadBudget(){
     const budget = await api("/api/admin/budget");
     bBudget.textContent = money(budget.budget_eur);
     bSpent.textContent = money(budget.spent_est_eur);
@@ -250,10 +272,23 @@ function setToken(t){
     bSuccess.textContent = String(budget.success_calls);
     bFail.textContent = String(budget.failed_calls);
     bLastErr.textContent = budget.last_error || "—";
+  }
+
+  async function refresh(){
+    const cat = (fCat.value || "").trim();
+    const only_failed = fFailed.value || "0";
+    const qs = new URLSearchParams();
+    if(cat) qs.set("category", cat);
+    if(only_failed === "1") qs.set("only_failed", "1");
 
     const arts = await api("/api/admin/articles?" + qs.toString());
     renderRows(arts.items || []);
+
+    if(budgetUnlocked){
+      await loadBudget();
+    }
   }
+
 
   async function init(){
     const t = getToken();
@@ -265,12 +300,24 @@ function setToken(t){
     try{
       locked.classList.add("hidden");
       content.classList.remove("hidden");
+
+      // Budget extra-lock (pro Browser-Session)
+      budgetUnlocked = (sessionStorage.getItem("MYAUKTION_BUDGET_UNLOCKED") === "1");
+      if(budgetUnlocked){
+        budgetLocked.classList.add("hidden");
+        budgetContent.classList.remove("hidden");
+      }else{
+        budgetLocked.classList.remove("hidden");
+        budgetContent.classList.add("hidden");
+      }
+
       await refresh();
     }catch(e){
       locked.classList.remove("hidden");
       content.classList.add("hidden");
     }
   }
+
 
   btnUnlock.onclick = async ()=>{
     const t = (tokenInp.value || "").trim();
@@ -279,9 +326,30 @@ function setToken(t){
     await init();
   };
 
+  if(btnBudgetUnlock){
+    btnBudgetUnlock.onclick = async ()=>{
+      const entered = (budgetTokenInp?.value || "").trim();
+      const t = (getToken() || "").trim();
+
+      // Simple UI-Schutz: Budget nur anzeigen, wenn Passwort nochmals eingegeben wurde
+      if(!entered) return;
+      if(t && entered !== t){
+        alert("Falsches Budget-Passwort.");
+        return;
+      }
+
+      sessionStorage.setItem("MYAUKTION_BUDGET_UNLOCKED", "1");
+      budgetUnlocked = true;
+      budgetLocked.classList.add("hidden");
+      budgetContent.classList.remove("hidden");
+      await refresh();
+    };
+  }
+
+
   fCat.onchange = refresh;
   fFailed.onchange = refresh;
-  fQ.oninput = ()=> init();
+  fQ.oninput = ()=> refresh();
 
   // CSV Export Bereich (Von/Bis)
   const btnExportRange = document.getElementById('btn-export-range');

@@ -71,7 +71,7 @@ RAW_DIR.mkdir(parents=True, exist_ok=True)
 PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
-EXPORT_CSV = EXPORT_DIR / "artikel_export.csv"
+EXPORT_CSV = EXPORT_DIR / "eartikel_export.csv"
 USAGE_JSON = EXPORT_DIR / "ki_usage.json"
 
 # Admin-Schutz (frei wählbar, NICHT OpenAI-Key)
@@ -115,6 +115,12 @@ def _default_meta(artikelnr: str) -> Dict[str, Any]:
         "einlieferer": "",
         "mitarbeiter": "",
         "lagerstand": 1,
+        "menge": 1,
+        "uebernehmen": 1,
+        "sortiment": "",
+        "einlieferer_id": "",
+        "angeliefert": "",
+        "betriebsmittel": "",
         "reviewed": False,
         "ki_source": "",          # pending | realtime | failed | ""
         "ki_last_error": "",
@@ -195,15 +201,16 @@ def _usage_fail(err: str) -> None:
 CSV_FIELDS = [
     "ArtikelNr",
     "Menge",
-    "Kategorie",
-    "Bezeichnung",
-    "Beschreibung",
-    "Rufpreis",
-    "Lagerstand",
+    "Preis",
+    "Ladenpreis",
     "Lagerort",
-    "Einlieferer",
-    "Mitarbeiter",
-    "RetailPreis",
+    "Lagerstand",
+    "Uebernehmen",
+    "Sortiment",
+    "Kategorie",
+    "EinliefererID",
+    "Angeliefert",
+    "Betriebsmittel",
 ]
 
 
@@ -218,16 +225,18 @@ def _rebuild_csv_export() -> None:
         nr = str(d.get("artikelnr") or meta_file.stem)
         rows.append({
             "ArtikelNr": nr,
-            "Menge": 1,
-            "Kategorie": d.get("kategorie", "") or "",
-            "Bezeichnung": d.get("titel", "") or "",
-            "Beschreibung": d.get("beschreibung", "") or "",
-            "Rufpreis": d.get("rufpreis", 0.0) or 0.0,
-            "Lagerstand": d.get("lagerstand", 1) or 1,
+            "Menge": d.get("menge", 1) or 1,
+            # Preis = Rufpreis (Startpreis), Ladenpreis = Listenpreis
+            "Preis": d.get("rufpreis", 0.0) or 0.0,
+            "Ladenpreis": d.get("retail_price", 0.0) or 0.0,
             "Lagerort": d.get("lagerort", "") or "",
-            "Einlieferer": d.get("einlieferer", "") or "",
-            "Mitarbeiter": d.get("mitarbeiter", "") or "",
-            "RetailPreis": d.get("retail_price", 0.0) or 0.0,
+            "Lagerstand": d.get("lagerstand", 1) or 1,
+            "Uebernehmen": d.get("uebernehmen", 1) or 1,
+            "Sortiment": d.get("sortiment", "") or "",
+            "Kategorie": d.get("kategorie", "") or "",
+            "EinliefererID": d.get("einlieferer_id", d.get("einlieferer", "")) or "",
+            "Angeliefert": d.get("angeliefert", "") or "",
+            "Betriebsmittel": d.get("betriebsmittel", "") or "",
         })
 
     def _sort_key(r):
@@ -365,7 +374,7 @@ def health_head():
 def export_csv():
     if not EXPORT_CSV.exists():
         _rebuild_csv_export()
-    return FileResponse(str(EXPORT_CSV), filename="artikel_export.csv", media_type="text/csv")
+    return FileResponse(str(EXPORT_CSV), filename="eartikel_export.csv", media_type="text/csv")
 
 
 @app.get("/api/next_artikelnr")
@@ -489,6 +498,13 @@ def meta(artikelnr: str):
         "retail_price": mj.get("retail_price", 0.0) or 0.0,
         "rufpreis": mj.get("rufpreis", 0.0) or 0.0,
         "lagerort": mj.get("lagerort", "") or "",
+        "menge": mj.get("menge", 1) or 1,
+        "lagerstand": mj.get("lagerstand", 1) or 1,
+        "uebernehmen": mj.get("uebernehmen", 1) or 1,
+        "sortiment": mj.get("sortiment", "") or "",
+        "einlieferer_id": mj.get("einlieferer_id", "") or "",
+        "angeliefert": mj.get("angeliefert", "") or "",
+        "betriebsmittel": mj.get("betriebsmittel", "") or "",
         "einlieferer": mj.get("einlieferer", "") or "",
         "mitarbeiter": mj.get("mitarbeiter", "") or "",
         "reviewed": bool(mj.get("reviewed", False)),
@@ -506,9 +522,37 @@ def save(data: Dict[str, Any]):
         return JSONResponse({"ok": False, "error": "Artikelnummer fehlt"}, status_code=400)
 
     mj = _load_meta_json(artikelnr)
-    for k in ["titel", "beschreibung", "lagerort", "einlieferer", "mitarbeiter", "kategorie"]:
+    # Textfelder
+    for k in ["titel", "beschreibung", "lagerort", "mitarbeiter", "kategorie", "sortiment", "betriebsmittel", "angeliefert"]:
         if k in data and data[k] is not None:
             mj[k] = str(data[k])
+
+    # IDs / Strings (nicht zwingend numerisch)
+    if "einlieferer_id" in data and data["einlieferer_id"] is not None:
+        mj["einlieferer_id"] = str(data["einlieferer_id"]).strip()
+    # Backward compatibility (falls Clients noch "einlieferer" schicken)
+    if "einlieferer" in data and data["einlieferer"] is not None:
+        mj["einlieferer"] = str(data["einlieferer"]).strip()
+
+    # Zahlenfelder
+    if "menge" in data and data["menge"] is not None:
+        try: mj["menge"] = int(float(data["menge"]))
+        except Exception: pass
+    if "lagerstand" in data and data["lagerstand"] is not None:
+        try: mj["lagerstand"] = int(float(data["lagerstand"]))
+        except Exception: pass
+    if "uebernehmen" in data and data["uebernehmen"] is not None:
+        try: mj["uebernehmen"] = int(float(data["uebernehmen"]))
+        except Exception: pass
+
+    # Preise (optional)
+    if "retail_price" in data and data["retail_price"] not in (None, ""):
+        try: mj["retail_price"] = round(float(str(data["retail_price"]).replace(",", ".")), 2)
+        except Exception: pass
+    if "rufpreis" in data and data["rufpreis"] not in (None, ""):
+        try: mj["rufpreis"] = round(float(str(data["rufpreis"]).replace(",", ".")), 2)
+        except Exception: pass
+
     if "reviewed" in data:
         mj["reviewed"] = bool(data.get("reviewed", False))
 
