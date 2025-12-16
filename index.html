@@ -141,7 +141,7 @@
         <!-- HAUPTMASKE -->
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
           <div>
-            <label class="block mb-1 text-xs opacity-80">Artikelnummer (mind. 6-stellig)</label>
+            <label class="block mb-1 text-xs opacity-80">Artikelnr. (min. 6-stellig)</label>
             <input id="f-artikelnr" type="number" inputmode="numeric" class="input" autocomplete="off" placeholder="z.B. 810233">
             <div id="artnr-hint" class="text-[11px] text-white/80 mt-1"></div>
           </div>
@@ -159,6 +159,10 @@
 
         <div class="thumb mb-2" id="thumb">
           <span class="text-xs text-white/70 text-center">Tippen, um Foto aufzunehmen / auszuwählen</span>
+        </div>
+
+        <div class="flex gap-2 mb-3">
+          <button id="btn-toggle-retail" type="button" class="btn btn-ghost text-[11px]">Listenpreis ausblenden</button>
         </div>
 
         <div class="img-strip flex gap-2 overflow-x-auto pb-1" id="img-strip"></div>
@@ -243,6 +247,7 @@
   const btnSave = document.getElementById('btn-save');
   const btnDescribe = document.getElementById('btn-describe');
   const btnPriceToggle = document.getElementById('btn-price-toggle');
+  const btnToggleRetail = document.getElementById('btn-toggle-retail');
 
   const retailWrap = document.getElementById('retail-wrap');
   const rufWrap = document.getElementById('ruf-wrap');
@@ -281,6 +286,7 @@
         angeliefert: "",
         betriebsmittel: "",
         price_system_enabled: true
+        ,hide_listprice: false
       }, d || {});
     }catch(e){
       return {einlieferer_id:"22",mitarbeiter:"Jan",menge:1,lagerstand:1,uebernehmen:1,angeliefert:"",betriebsmittel:"",price_system_enabled:true};
@@ -338,28 +344,37 @@
   function applyPriceMode(){
     const s = loadSettings();
     const enabled = (s.price_system_enabled !== false);
+    const hideRetail = (s.hide_listprice === true);
 
     if(btnPriceToggle){
       btnPriceToggle.textContent = enabled ? "Preis-System ausschalten" : "Preis-System einschalten";
     }
+    if(btnToggleRetail){
+      // Button nur sinnvoll, wenn Preis-System AN ist
+      btnToggleRetail.classList.toggle("hidden", !enabled);
+      btnToggleRetail.textContent = hideRetail ? "Listenpreis einblenden" : "Listenpreis ausblenden";
+    }
 
-    // UI: wenn Preis-System AUS -> Listenpreis ausblenden & leeren
+    const retailVisible = (enabled && !hideRetail);
+
     if(retailWrap){
-      retailWrap.classList.toggle("hidden", !enabled);
+      retailWrap.classList.toggle("hidden", !retailVisible);
     }
     if(rufWrap){
-      // wenn Listenpreis weg ist, Rufpreis soll volle Breite haben
-      rufWrap.classList.toggle("sm:col-span-2", !enabled);
+      rufWrap.classList.toggle("sm:col-span-2", !retailVisible);
+    }
+
+    if(!retailVisible){
+      fRetail.value = "";
+      fRetail.classList.add("price-off");
+    }else{
+      fRetail.classList.remove("price-off");
     }
 
     if(!enabled){
-      fRetail.value = "";
-      // Rufpreis fix 1 (damit import nie 0 ist)
       fRuf.value = "1";
-      fRetail.classList.add("price-off");
       fRuf.classList.add("price-off");
     }else{
-      fRetail.classList.remove("price-off");
       fRuf.classList.remove("price-off");
     }
   }
@@ -589,7 +604,7 @@
       einlieferer: s.einlieferer_id,
 
       price_system_enabled: (s.price_system_enabled !== false),
-      retail_price: (s.price_system_enabled === false) ? "" : (fRetail.value||""),
+      retail_price: (s.price_system_enabled === false || s.hide_listprice === true) ? "" : (fRetail.value||""),
       rufpreis: (s.price_system_enabled === false) ? 1 : (fRuf.value||0),
 
       titel: (fTitle.value||"").trim(),
@@ -637,6 +652,17 @@
       applySettingsToUI();
       applyPriceMode();
     };
+
+
+    if(btnToggleRetail){
+      btnToggleRetail.onclick = ()=>{
+        const s = loadSettings();
+        s.hide_listprice = (s.hide_listprice === true) ? false : true;
+        saveSettings(s);
+        applySettingsToUI();
+        applyPriceMode();
+      };
+    }
 
     // Wenn noch nie gesetzt: einmal öffnen
     const s0 = loadSettings();
