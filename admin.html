@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="de">
 <head>
-    <!-- build:20251215_062635 -->
+    <!-- build:ADMIN_RANGE_FIX_20251216_062151 -->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
@@ -69,11 +69,11 @@
       <input id="export-to" class="input" type="number" placeholder="z.B. 123480">
     </div>
     <div class="flex items-end gap-2">
-      <a id="btn-export-range" class="btn btn-primary text-sm" href="#">Bereich exportieren</a>
+      <button id="btn-export-range" class="btn btn-primary text-sm" type="button">Bereich exportieren</button>
       <a href="/api/export.csv" id="btn-export-all" class="btn btn-primary">CSV downloaden</a>
     </div>
   </div>
-  <div class="text-[11px] opacity-70 mt-2">Tipp: leer lassen = kompletter Export.</div>
+  <div class="text-[11px] opacity-70 mt-2">Leer lassen = kompletter Export.</div>
 </div>
 
           <button id="btn-refresh" class="btn btn-primary">Refresh</button>
@@ -287,33 +287,30 @@ function setToken(t){
   fFailed.onchange = refresh;
   fQ.oninput = ()=> init();
 
-  init();
-
-  // Export range helper
+  // CSV Export Bereich (Von/Bis)
   const btnExportRange = document.getElementById('btn-export-range');
   const exFrom = document.getElementById('export-from');
   const exTo = document.getElementById('export-to');
 
-  function getToken(){
-    try{
-      return (localStorage.getItem('ADMIN_TOKEN')||'').trim();
-    }catch(e){ return ''; }
-  }
-
   if(btnExportRange){
-    btnExportRange.onclick = (e)=>{
-      e.preventDefault();
-      const a = (exFrom?.value||'').trim();
-      const b = (exTo?.value||'').trim();
+    btnExportRange.addEventListener('click', ()=>{
+      const a = exFrom ? String(exFrom.value||'').trim() : '';
+      const b = exTo ? String(exTo.value||'').trim() : '';
       const params = new URLSearchParams();
       if(a) params.set('from_nr', a);
       if(b) params.set('to_nr', b);
-      const t = getToken();
+
+      // Admin Token als Query mitschicken (Server prüft token=...)
+      const t = getToken ? String(getToken()||'').trim() : '';
       if(t) params.set('token', t);
+
       const url = '/api/export.csv' + (params.toString() ? ('?' + params.toString()) : '');
       window.location.href = url;
-    };
+    });
   }
+
+
+  init();
 </script>
 </body>
 </html>
