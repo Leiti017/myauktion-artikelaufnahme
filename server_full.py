@@ -79,12 +79,23 @@ EXPORT_CSV = EXPORT_DIR / "eartikel_export.csv"
 # ----------------------------
 CSV_HEADERS = ["ArtikelNr","Menge","Bezeichnung","Beschreibung","Preis","Lagerort","Lagerstand","uebernehmen","Einlieferer-ID","angeliefert","Betriebsmittel"]
 
-def _format_price_1dp(val: Any) -> str:
+def _format_price_int(val: Any) -> str:
+    """Preis-Feld (Rufpreis): IMMER ohne Dezimalstellen und ohne . oder ,"""
     try:
         f = float(val or 0)
     except Exception:
         f = 0.0
-    return f"{f:.1f}"
+    return str(int(round(f)))
+
+def _format_listenpreis(val: Any) -> str:
+    """Listenpreis (nur falls irgendwann exportiert): Dezimalpunkt -> Komma"""
+    try:
+        f = float(val or 0)
+    except Exception:
+        f = 0.0
+    s = f"{f:.2f}"
+    return s.replace(".", ",")
+
 
 def _ensure_export_csv_exists() -> None:
     if not EXPORT_CSV.exists():
@@ -107,7 +118,7 @@ def _update_csv_row_for_art(artikelnr: str, meta: Dict[str, Any]) -> None:
     if raw.startswith(b"\xef\xbb\xbf"):
         raw = raw[3:]
     text = raw.decode("utf-8", errors="replace")
-    rdr = csv.reader(io.StringIO(text))
+    rdr = csv.reader(io.StringIO(text), delimiter=';')
     rows = list(rdr)
 
     # Ensure headers
@@ -121,7 +132,7 @@ def _update_csv_row_for_art(artikelnr: str, meta: Dict[str, Any]) -> None:
     menge = int(meta.get("menge") or 1)
     titel = str(meta.get("titel") or "")
     beschr = str(meta.get("beschreibung") or "")
-    preis = _format_price_1dp(meta.get("rufpreis", 0))
+    preis = _format_price_int(meta.get("rufpreis", 0))
     lagerort = str(meta.get("lagerort") or "")
     lagerstand = int(meta.get("lagerstand") or 1)
     uebernehmen = int(meta.get("uebernehmen") or 1)
@@ -144,7 +155,7 @@ def _update_csv_row_for_art(artikelnr: str, meta: Dict[str, Any]) -> None:
 
     # Write back with BOM
     bio = io.StringIO()
-    w = csv.writer(bio, delimiter=",", quotechar='"', quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
+    w = csv.writer(bio, delimiter=";", quotechar='"', quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
     for r in out_rows:
         w.writerow(r)
     EXPORT_CSV.write_bytes(("\ufeff" + bio.getvalue()).encode("utf-8"))
@@ -285,6 +296,7 @@ CSV_FIELDS = [
 
 
 def _rebuild_csv_export() -> None:
+    """Kompletter CSV Export (Excel-kompatibel: UTF-8 BOM + Semikolon)."""
     rows = []
     for meta_file in RAW_DIR.glob("*.json"):
         try:
@@ -293,37 +305,38 @@ def _rebuild_csv_export() -> None:
             continue
 
         nr = str(d.get("artikelnr") or meta_file.stem)
-        rows.append({
-            "ArtikelNr": nr,
-            "Menge": d.get("menge", 1) or 1,
-            # Preis = Rufpreis (Startpreis), Ladenpreis = Listenpreis
-            "Preis": d.get("rufpreis", 0.0) or 0.0,
-            "Ladenpreis": d.get("retail_price", 0.0) or 0.0,
-            "Lagerort": d.get("lagerort", "") or "",
-            "Lagerstand": d.get("lagerstand", 1) or 1,
-            "Uebernehmen": d.get("uebernehmen", 1) or 1,
-            "Sortiment": d.get("sortiment", "") or "",
-            "Kategorie": d.get("kategorie", "") or "",
-            "EinliefererID": d.get("einlieferer_id", d.get("einlieferer", "")) or "",
-            "Angeliefert": d.get("angeliefert", "") or "",
-            "Betriebsmittel": d.get("betriebsmittel", "") or "",
-        })
+        rows.append([
+            nr,
+            str(int(d.get("menge", 1) or 1)),
+            str(d.get("titel", "") or ""),
+            str(d.get("beschreibung", "") or ""),
+            _format_price_int(d.get("rufpreis", 0) or 0),
+            str(d.get("lagerort", "") or ""),
+            str(int(d.get("lagerstand", 1) or 1)),
+            str(int(d.get("uebernehmen", 1) or 1)),
+            str(d.get("einlieferer_id", d.get("einlieferer", "")) or ""),
+            str(d.get("angeliefert", "") or ""),
+            str(d.get("betriebsmittel", "") or ""),
+        ])
 
     def _sort_key(r):
         try:
-            return int(r["ArtikelNr"])
+            return int(r[0])
         except Exception:
-            return r["ArtikelNr"]
+            return r[0]
 
     rows.sort(key=_sort_key)
 
-    with EXPORT_CSV.open("w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=CSV_FIELDS, delimiter=";")
-        w.writeheader()
-        for r in rows:
-            w.writerow(r)
+    import io, csv
+    bio = io.StringIO()
+    w = csv.writer(bio, delimiter=";", quotechar='"', quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
+    w.writerow(CSV_HEADERS)
+    for r in rows:
+        w.writerow(r)
 
+    EXPORT_CSV.write_bytes(("\ufeff" + bio.getvalue()).encode("utf-8"))
     print("[CSV] Export aktualisiert:", EXPORT_CSV)
+
 
 
 # ----------------------------
@@ -433,7 +446,7 @@ def health():
 @app.get("/api/export.csv")
 def export_csv(from_nr: str | None = None, to_nr: str | None = None):
     """
-    Export CSV (UTF-8 mit BOM für Excel). Optionaler Bereich:
+    Export CSV (UTF-8 mit BOM + Semikolon für Excel). Optionaler Bereich:
       /api/export.csv?from_nr=123458&to_nr=123480
     """
     _ensure_export_csv_exists()
@@ -472,7 +485,7 @@ def export_csv(from_nr: str | None = None, to_nr: str | None = None):
             str(int(meta.get("menge") or 1)),
             str(meta.get("titel") or ""),
             str(meta.get("beschreibung") or ""),
-            _format_price_1dp(meta.get("rufpreis", 0)),
+            _format_price_int(meta.get("rufpreis", 0)),
             str(meta.get("lagerort") or ""),
             str(int(meta.get("lagerstand") or 1)),
             str(int(meta.get("uebernehmen") or 1)),
@@ -482,7 +495,7 @@ def export_csv(from_nr: str | None = None, to_nr: str | None = None):
         ])
 
     bio = io.StringIO()
-    w = csv.writer(bio, delimiter=",", quotechar='"', quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
+    w = csv.writer(bio, delimiter=";", quotechar='"', quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
     w.writerow(CSV_HEADERS)
     for r in rows:
         w.writerow(r)

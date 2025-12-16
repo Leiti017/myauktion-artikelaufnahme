@@ -108,16 +108,9 @@
               <label class="block mb-1 text-xs opacity-80">Mitarbeiter</label>
               <select id="s-mitarbeiter" class="input">
                 <option>Jan</option><option>Rene</option><option>Karin</option><option>Katharina</option>
-                <option>Linda</option><option>Jasmin</option><option>Natascha</option>
+                <option>Linda</option><option>Jasmin</option><option>Natascha</option><option>Gast1</option><option>Gast2</option><option>Gast3</option>
               </select>
-            </div>
-
-            <div>
-              <label class="block mb-1 text-xs opacity-80">Menge</label>
-              <input id="s-menge" type="number" class="input" value="1" min="1">
-            </div>
-
-            <div>
+            </div>            <div>
               <label class="block mb-1 text-xs opacity-80">Lagerstand</label>
               <input id="s-lagerstand" type="number" class="input" value="1" min="1">
             </div>
@@ -146,11 +139,15 @@
         <div id="settings-mini" class="text-[11px] text-white/80 mb-3"></div>
 
         <!-- HAUPTMASKE -->
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
           <div>
             <label class="block mb-1 text-xs opacity-80">Artikelnummer (mind. 6-stellig)</label>
             <input id="f-artikelnr" type="number" inputmode="numeric" class="input" autocomplete="off" placeholder="z.B. 810233">
             <div id="artnr-hint" class="text-[11px] text-white/80 mt-1"></div>
+          </div>
+          <div>
+            <label class="block mb-1 text-xs opacity-80">Menge</label>
+            <input id="f-menge" type="number" class="input" value="1" min="1">
           </div>
           <div>
             <label class="block mb-1 text-xs opacity-80">Lagerort</label>
@@ -204,24 +201,24 @@
         </div>
 
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
-          <div>
-            <div class="flex items-center justify-between mb-1">
-              <label class="block text-xs opacity-80">Listenpreis (€)</label>
-              <button id="btn-price-toggle" class="btn btn-ghost text-[11px]" type="button">Preis-System ausschalten</button>
-            </div>
+          <div id="retail-wrap">
+            <label class="block mb-1 text-xs opacity-80">Listenpreis (€)</label>
             <input id="f-retail" type="number" class="input">
           </div>
-          <div>
+          <div id="ruf-wrap">
             <label class="block mb-1 text-xs opacity-80">Rufpreis</label>
             <input id="f-ruf" type="number" class="input">
           </div>
         </div>
 
+        <div class="flex justify-end mb-3">
+          <button id="btn-price-toggle" class="btn btn-ghost text-[11px]" type="button">Preis-System ausschalten</button>
+        </div>
+
         <label class="block mb-1 text-xs opacity-80">System-Log</label>
         <div id="log" class="text-[11px] text-slate-900 bg-white/90 rounded-xl p-2 max-h-40 overflow-y-auto"></div>
 
-        <div class="text-[10px] text-white/70 mt-3">build: LIVE_SETTINGS_PRICE_VISUAL</div>
-      </section>
+              </section>
     </div>
   </main>
 </div>
@@ -230,6 +227,7 @@
   const fArt = document.getElementById('f-artikelnr');
   const artHint = document.getElementById('artnr-hint');
   const fLager = document.getElementById('f-lagerort');
+  const fMenge = document.getElementById('f-menge');
 
   const fFile = document.getElementById('f-file');
   const thumb = document.getElementById('thumb');
@@ -246,6 +244,9 @@
   const btnDescribe = document.getElementById('btn-describe');
   const btnPriceToggle = document.getElementById('btn-price-toggle');
 
+  const retailWrap = document.getElementById('retail-wrap');
+  const rufWrap = document.getElementById('ruf-wrap');
+
   const statusText = document.getElementById('status-text');
   const statusPill = document.getElementById('status-pill');
   const statusPillText = document.getElementById('status-pill-text');
@@ -261,7 +262,6 @@
 
   const sEinl = document.getElementById('s-einlieferer-id');
   const sMit  = document.getElementById('s-mitarbeiter');
-  const sMenge = document.getElementById('s-menge');
   const sLagerstand = document.getElementById('s-lagerstand');
   const sUebernehmen = document.getElementById('s-uebernehmen');
   const sAngeliefert = document.getElementById('s-angeliefert');
@@ -303,6 +303,8 @@
 
   function applySettingsToUI(){
     const s = loadSettings();
+    // Menge kommt jetzt direkt aus der Hauptmaske
+    const mengeVal = parseInt((fMenge?.value)||String(s.menge ?? 1), 10) || 1;
     sEinl.value = s.einlieferer_id || "22";
     sMit.value = s.mitarbeiter || "Jan";
     sMenge.value = String(s.menge ?? 1);
@@ -318,7 +320,7 @@
     return {
       einlieferer_id: (sEinl.value||"").trim(),
       mitarbeiter: (sMit.value||"").trim(),
-      menge: parseInt(sMenge.value||"1",10) || 1,
+      menge: parseInt((fMenge?.value)||"1",10) || 1,
       lagerstand: parseInt(sLagerstand.value||"1",10) || 1,
       uebernehmen: parseInt(sUebernehmen.value||"1",10) || 1,
       angeliefert: (sAngeliefert.value||"").trim(),
@@ -336,11 +338,23 @@
   function applyPriceMode(){
     const s = loadSettings();
     const enabled = (s.price_system_enabled !== false);
+
     if(btnPriceToggle){
       btnPriceToggle.textContent = enabled ? "Preis-System ausschalten" : "Preis-System einschalten";
     }
+
+    // UI: wenn Preis-System AUS -> Listenpreis ausblenden & leeren
+    if(retailWrap){
+      retailWrap.classList.toggle("hidden", !enabled);
+    }
+    if(rufWrap){
+      // wenn Listenpreis weg ist, Rufpreis soll volle Breite haben
+      rufWrap.classList.toggle("sm:col-span-2", !enabled);
+    }
+
     if(!enabled){
       fRetail.value = "";
+      // Rufpreis fix 1 (damit import nie 0 ist)
       fRuf.value = "1";
       fRetail.classList.add("price-off");
       fRuf.classList.add("price-off");
@@ -558,12 +572,15 @@
     const art = (fArt.value||"").trim();
     const s = loadSettings();
 
+    // Menge auch in Settings speichern (damit es beim nächsten Artikel gleich bleibt)
+    try{ s.menge = mengeVal; saveSettings(s); applySettingsToUI(); }catch(e){}
+
     const payload = {
       artikelnr: art,
       lagerort: (fLager.value||"").trim(),
 
       mitarbeiter: s.mitarbeiter,
-      menge: s.menge,
+      menge: mengeVal,
       lagerstand: s.lagerstand,
       uebernehmen: s.uebernehmen,
       einlieferer_id: s.einlieferer_id,
