@@ -46,7 +46,7 @@ async def _no_cache_html(request, call_next):
     resp = await call_next(request)
     try:
         ct = resp.headers.get("content-type", "")
-        if ct.startswith("text/html") or request.url.path in ("/", "/admin", "/static/site.webmanifest", "/static/manifest.webmanifest"):
+        if ct.startswith("text/html") or request.url.path in ("/", "/admin", "/static/site.webmanifest", "/static/manifest.webmanifest") or request.url.path.startswith("/static/uploads/"):
             resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
             resp.headers["Pragma"] = "no-cache"
             resp.headers["Expires"] = "0"
@@ -104,6 +104,15 @@ def _format_rufpreis(val: Any) -> str:
         f = 0.0
     return str(int(round(f)))
 
+
+def _format_ladenpreis(val: Any) -> str:
+    """Listenpreis (= Ladenpreis) im Export mit Komma, z.B. 199,99; 0 => leer."""
+    try:
+        f = float(str(val or 0).replace(",", "."))
+    except Exception:
+        f = 0.0
+    return (f"{f:.2f}".replace(".", ",") if f else "")
+
 def _ensure_export_csv_exists() -> None:
     if not EXPORT_CSV.exists():
         _rebuild_csv_export()
@@ -145,13 +154,13 @@ def _update_csv_row_for_art(artikelnr: str, meta: Dict[str, Any]) -> None:
         lp = float(str(meta.get("retail_price") or 0).replace(",", "."))
     except Exception:
         lp = 0.0
-    ladenpreis = (f"{lp:.2f}".replace(".", ",") if lp else "")
+    ladenpreis = _format_ladenpreis(lp)
 
     lagerort = str(meta.get("lagerort") or "")
     lagerstand = int(meta.get("lagerstand") or 1)
     uebernehmen = int(meta.get("uebernehmen") or 1)
     sortiment = str(meta.get("sortiment") or "")
-    einl = str(meta.get("einlieferer_id", meta.get("einlieferer", "")) or "")
+    einl_id = str(meta.get("einlieferer_id") or meta.get("einlieferer") or "")
     angel = str(meta.get("angeliefert") or "")
     betr = str(meta.get("betriebsmittel") or "")
     mitarb = str(meta.get("mitarbeiter") or "")
@@ -167,7 +176,7 @@ def _update_csv_row_for_art(artikelnr: str, meta: Dict[str, Any]) -> None:
         str(lagerstand),
         str(uebernehmen),
         sortiment,
-        einl,
+        einl_id,
         angel,
         betr,
         mitarb,
@@ -195,7 +204,7 @@ def _update_csv_row_for_art(artikelnr: str, meta: Dict[str, Any]) -> None:
 USAGE_JSON = EXPORT_DIR / "ki_usage.json"
 
 # Admin-Schutz (frei wählbar, NICHT OpenAI-Key)
-ADMIN_TOKEN = (os.getenv("MYAUKTION_ADMIN_TOKEN", "") or os.getenv("ADMIN_TOKEN", "")).strip()  # MUSS gesetzt sein, sonst bleibt Admin gesperrt
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "").strip()  # leer => Admin offen (nur für Tests)
 DEFAULT_BUDGET_EUR = float((os.getenv("KI_BUDGET_EUR", "10") or "10").replace(",", "."))
 COST_PER_SUCCESS_CALL_EUR = float((os.getenv("KI_COST_PER_SUCCESS_CALL_EUR", "0.003") or "0.003").replace(",", "."))
 
@@ -386,9 +395,8 @@ def _gdrive_backup_article(artikelnr: str) -> None:
 # Admin Auth
 # ----------------------------
 def _is_admin(request: Request) -> bool:
-    # Wenn kein Token konfiguriert ist, bleibt Admin aus Sicherheitsgründen gesperrt
     if not ADMIN_TOKEN:
-        return False
+        return True
     token = (request.headers.get("X-Admin-Token", "") or "").strip()
     if not token:
         token = (request.query_params.get("token", "") or "").strip()
@@ -516,11 +524,7 @@ def _rebuild_csv_export() -> None:
             "Beschreibung": str(d.get("beschreibung", "") or ""),
             "Menge": int(d.get("menge", 1) or 1),
             "Preis": _format_rufpreis(d.get("rufpreis", 0.0) or 0.0),
-            "Ladenpreis": (lambda v: (f"{v:.2f}".replace(".", ",") if v else ""))(
-                (lambda raw: float(str(raw).replace(",", ".")) if str(raw).strip() else 0.0)(
-                    d.get("retail_price", d.get("listenpreis", 0)) or 0
-                )
-            ),
+            "Ladenpreis": _format_ladenpreis(d.get("retail_price", 0) or 0),
             "Lagerort": str(d.get("lagerort", "") or ""),
             "Lagerstand": int(d.get("lagerstand", 1) or 1),
             "Uebernehmen": int(d.get("uebernehmen", 1) or 1),
@@ -530,6 +534,7 @@ def _rebuild_csv_export() -> None:
             "Betriebsmittel": str(d.get("betriebsmittel", "") or ""),
             "Mitarbeiter": str(d.get("mitarbeiter", "") or ""),
         })
+
     def _sort_key(r: dict):
         try:
             return int(r.get("ArtikelNr", 0))
@@ -713,65 +718,8 @@ def root():
 
 
 @app.get("/admin")
-def admin_root(request: Request):
-    if _is_admin(request):
-        return FileResponse(str(BASE_DIR / "admin.html"))
-
-    # Login-Seite (statt JSON), wenn man /admin direkt im Browser öffnet
-    if not ADMIN_TOKEN:
-        msg = "Admin ist gesperrt: Environment Variable MYAUKTION_ADMIN_TOKEN (oder ADMIN_TOKEN) ist nicht gesetzt."
-    else:
-        msg = ""
-
-    html = f"""
-<!doctype html>
-<html lang="de">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Admin Login</title>
-  <style>
-    body{{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:#0b0f14;color:#e8eef6;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:24px;}}
-    .card{{max-width:420px;width:100%;background:#121826;border:1px solid #1f2a3a;border-radius:16px;padding:18px;box-shadow:0 10px 30px rgba(0,0,0,.35);}}
-    h1{{font-size:18px;margin:0 0 10px 0;}}
-    p{{opacity:.85;margin:0 0 12px 0;}}
-    input{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid #2a3a52;background:#0e1420;color:#e8eef6;outline:none;}}
-    button{{margin-top:10px;width:100%;padding:12px 12px;border-radius:12px;border:0;background:#2b7cff;color:white;font-weight:700;cursor:pointer;}}
-    .warn{{margin-top:10px;color:#ffcc66;}}
-    .err{{margin-top:10px;color:#ff6b6b;}}
-    small{{display:block;margin-top:10px;opacity:.75;}}
-  </style>
-</head>
-<body>
-  <div class="card">
-    <h1>Admin Bereich</h1>
-    <p>Bitte Admin-Passwort eingeben.</p>
-    {"<div class='warn'>"+msg+"</div>" if msg else ""}
-    <input id="pw" type="password" placeholder="Passwort" autocomplete="current-password" />
-    <button id="go">Einloggen</button>
-    <div id="e" class="err" style="display:none;"></div>
-    <small>Tipp: Wenn du über den Admin-Button kommst, wird das Passwort im Browser gespeichert.</small>
-  </div>
-<script>
-  const btn = document.getElementById('go');
-  const pw  = document.getElementById('pw');
-  const err = document.getElementById('e');
-  function showErr(t){{ err.style.display='block'; err.textContent=t; }}
-  btn.addEventListener('click', async () => {{
-    const token = (pw.value||'').trim();
-    if(!token) return showErr('Bitte Passwort eingeben.');
-    const r = await fetch('/api/admin/ping?token=' + encodeURIComponent(token));
-    if(!r.ok) return showErr('Falsches Passwort.');
-    localStorage.setItem('admin_token', token);
-    location.href = '/admin?token=' + encodeURIComponent(token);
-  }});
-  pw.addEventListener('keydown', (ev)=>{{ if(ev.key==='Enter') btn.click(); }});
-</script>
-</body>
-</html>
-"""
-    from fastapi.responses import HTMLResponse
-    return HTMLResponse(html, status_code=401)
+def admin_root():
+    return FileResponse(str(BASE_DIR / "admin.html"))
 
 
 @app.get("/articles")
@@ -928,8 +876,6 @@ async def upload(
     # set pending, damit Polling NICHT bei altem realtime sofort stoppt
     mj = _load_meta_json(artikelnr)
     mj["last_image"] = out.name
-    if not str(mj.get("cover") or "").strip():
-        mj["cover"] = out.name
     mj["ki_source"] = "pending"
     mj["ki_last_error"] = ""
     mj["batch_done"] = False
@@ -946,48 +892,19 @@ async def upload(
 @app.get("/api/images")
 def images(artikelnr: str):
     artikelnr = str(artikelnr).strip()
-    mj = _load_meta_json(artikelnr)
-    cover = str(mj.get("cover") or "").strip()
-
-    files: list[str] = []
+    files = []
     for f in sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg")):
         rel = f.relative_to(BASE_DIR)
         files.append("/static/" + str(rel).replace("\\", "/"))
+    return {"ok": True, "files": files}
 
-    # cover-first ordering (if cover exists)
-    if cover:
-        def _fname(u: str) -> str:
-            return str(u).split("/")[-1]
-        files.sort(key=lambda u: (0 if _fname(u) == cover else 1, u))
 
-    return {"ok": True, "files": files, "cover": cover}
+
 @app.post("/api/delete_last_image")
 def delete_last_image(data: Dict[str, Any]):
     artikelnr = str(data.get("artikelnr", "")).strip()
     if not artikelnr:
         return JSONResponse({"ok": False, "error": "Artikelnummer fehlt"}, status_code=400)
-
-@app.post("/api/set_cover")
-def set_cover(data: Dict[str, Any]):
-    artikelnr = str(data.get("artikelnr") or "").strip()
-    filename = str(data.get("filename") or "").strip()
-    if not artikelnr or not filename:
-        return {"ok": False, "error": "missing"}
-
-    mj = _load_meta_json(artikelnr)
-
-    # verify file belongs to this article
-    if not filename.startswith(f"{artikelnr}_"):
-        return {"ok": False, "error": "invalid"}
-
-    path = RAW_DIR / filename
-    if not path.exists():
-        return {"ok": False, "error": "not_found"}
-
-    mj["cover"] = filename
-    _save_meta_json(artikelnr, mj)
-    return {"ok": True, "cover": filename}
-
 
     files = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
     if not files:
@@ -999,6 +916,15 @@ def set_cover(data: Dict[str, Any]):
     except Exception as e:
         return JSONResponse({"ok": False, "error": f"Konnte Bild nicht löschen: {e}"}, status_code=500)
 
+    # auch ggf. bearbeitete Version löschen (best-effort)
+    try:
+        stem = target.stem
+        for pf in PROCESSED_DIR.glob(stem + ".*"):
+            try: pf.unlink()
+            except Exception: pass
+    except Exception:
+        pass
+
     # meta last_image aktualisieren
     mj = _load_meta_json(artikelnr)
     mj["last_image"] = files[-2].name if len(files) >= 2 else ""
@@ -1009,7 +935,12 @@ def set_cover(data: Dict[str, Any]):
 @app.post("/api/delete_image")
 def delete_image(payload: Dict[str, Any]):
     artikelnr = str(payload.get("artikelnr", "")).strip()
-    filename = str(payload.get("filename", "")).strip()
+    filename = str(payload.get("filename", "") or payload.get("name","") or payload.get("file","") or payload.get("url","")).strip()
+    # falls URL: nur basename nehmen
+    if "/" in filename:
+        filename = filename.split("/")[-1]
+    if "?" in filename:
+        filename = filename.split("?",1)[0]
 
     if not artikelnr or not filename:
         return JSONResponse({"ok": False, "error": "artikelnr/filename fehlt"}, status_code=400)
@@ -1246,14 +1177,6 @@ def admin_budget(request: Request):
         "last_success_at": int(u.get("last_success_at", 0)),
         "last_error": u.get("last_error", "") or "",
     }
-
-
-@app.get("/api/admin/ping")
-def admin_ping(request: Request):
-    guard = _admin_guard(request)
-    if guard:
-        return guard
-    return {"ok": True}
 
 
 @app.get("/api/admin/articles")

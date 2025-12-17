@@ -76,10 +76,7 @@
         <div class="text-xs md:text-sm text-white/80">BEI UNS BESTIMMST DU DEN PREIS!</div>
       </div>
     </div>
-    <div class="flex items-center gap-4">
-      <a id="btn-admin" href="/admin" class="underline text-sm opacity-90">Admin</a>
-      <a href="/articles" class="underline text-sm opacity-90">Gesamtartikel</a>
-    </div>
+    <a href="/admin" class="underline text-sm opacity-90">Admin</a>
   </header>
 
   <main class="glass rounded-3xl p-4 md:p-6 shadow-xl">
@@ -333,13 +330,13 @@
     sEinl.value = s.einlieferer_id || "22";
     sMit.value = s.mitarbeiter || "Jan";
     sLagerstand.value = String(s.lagerstand ?? 1);
-    sUebernehmen.value = "1"; // immer reset
-sAngeliefert.value = s.angeliefert || "";
+    sUebernehmen.value = String(s.uebernehmen ?? 1);
+    sAngeliefert.value = s.angeliefert || "";
     sBetriebsmittel.value = s.betriebsmittel || "";
     if(sSortiment) sSortiment.value = s.sortiment || "";
     settingsMini.textContent = "Einstellungen: " + settingsText(s);
     // Main-Feld Menge übernehmen
-    try{ fMenge.value = "1"; }catch(e){}
+    try{ fMenge.value = String(s.menge ?? 1); }catch(e){}
   }
 
   function readSettingsFromUI(){
@@ -347,9 +344,9 @@ sAngeliefert.value = s.angeliefert || "";
     return {
       einlieferer_id: (sEinl.value||"").trim(),
       mitarbeiter: (sMit.value||"").trim(),
-      menge: 1, // Menge wird immer zurückgesetzt
+      menge: parseInt((fMenge?.value)||"1",10) || 1,
       lagerstand: parseInt(sLagerstand.value||"1",10) || 1,
-      uebernehmen: 1, // Uebernehmen wird immer zurückgesetzt
+      uebernehmen: parseInt(sUebernehmen.value||"1",10) || 1,
       angeliefert: (sAngeliefert.value||"").trim(),
       betriebsmittel: (sBetriebsmittel.value||"").trim(),
       sortiment: (sSortiment ? (sSortiment.value||"").trim() : (prev.sortiment||"")),
@@ -448,7 +445,7 @@ sAngeliefert.value = s.angeliefert || "";
       img.src = url;
 
       // filename aus URL
-      const fname = String(url).split('/').pop();
+      const fname = String(url).split('/').pop().split('?')[0];
 
       // cover markieren (erster in Liste ist ohnehin cover-first, aber zur Sicherheit)
       const isCover = (fname === cover) || (idx===0 && !cover && files.length);
@@ -477,37 +474,18 @@ sAngeliefert.value = s.angeliefert || "";
       imgStrip.appendChild(img);
     });
 
+    // Wenn vorhanden: erstes Bild automatisch anzeigen (damit man sofort sieht ob Upload/Löschen geklappt hat)
+    if(files.length){
+      const firstImg = imgStrip.querySelector('img');
+      if(firstImg) firstImg.click();
+    }else{
+      thumb.innerHTML = `<div class="muted">Kein Foto</div>`;
+      if(btnSetCover) btnSetCover.classList.add("hidden");
+    }
+
     if(btnSetCover){
       btnSetCover.classList.add("hidden");
     }
-  // Titelbild setzen
-  if(btnSetCover){
-    btnSetCover.addEventListener('click', async ()=>{
-      const art = (fArt.value||"").trim();
-      if(!art || !selectedFilename) return;
-      try{
-        setPill(true, "Titelbild wird gesetzt …");
-        const res = await fetch('/api/set_cover', {
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({artikelnr: art, filename: selectedFilename})
-        });
-        const j = await res.json();
-        if(j && j.ok){
-          toast("Titelbild gesetzt ✓");
-          await refreshImages();
-        }else{
-          toast("Titelbild konnte nicht gesetzt werden");
-        }
-      }catch(e){
-        toast("Fehler beim Titelbild");
-      }finally{
-        setPill(false);
-        if(btnSetCover) btnSetCover.classList.add("hidden");
-      }
-    });
-  }
-
   }
 
 
@@ -518,11 +496,7 @@ sAngeliefert.value = s.angeliefert || "";
     const j = await res.json();
     if(!j.ok) return;
 
-    // Bezeichnung nur überschreiben, wenn sinnvoll (nicht leer und nicht "...")
-    const nextTitle = (j.titel || "").trim();
-    if(nextTitle && !/^\.{3,}$/.test(nextTitle)){
-      fTitle.value = nextTitle;
-    }
+    fTitle.value = j.titel || "";
     fDesc.value  = j.beschreibung || "";
     fRetail.value = (j.retail_price ?? "");
     fRuf.value    = (j.rufpreis ?? "");
@@ -543,11 +517,7 @@ sAngeliefert.value = s.angeliefert || "";
       const j = await res.json();
       if(j.ok){
         if(j.ki_source === 'realtime'){
-          // Bezeichnung nur überschreiben, wenn sinnvoll (nicht leer und nicht "...")
-    const nextTitle = (j.titel || "").trim();
-    if(nextTitle && !/^\.{3,}$/.test(nextTitle)){
-      fTitle.value = nextTitle;
-    }
+          fTitle.value = j.titel || "";
           fDesc.value  = j.beschreibung || "";
           fRetail.value = (j.retail_price ?? "");
           fRuf.value    = (j.rufpreis ?? "");
@@ -579,8 +549,9 @@ sAngeliefert.value = s.angeliefert || "";
   thumb.onclick = ()=> fFile.click();
 
   fArt.addEventListener('input', updateArtnrHint);
-  fMenge.addEventListener('change', ()=>{ /* Menge gilt nur für diesen Artikel; Default bleibt immer 1 */ });
-fArt.addEventListener('blur', async ()=>{
+  fMenge.addEventListener('change', ()=>{});
+
+  fArt.addEventListener('blur', async ()=>{
     updateArtnrHint();
     if(!validArtNr()) return;
     await refreshImages();
@@ -625,34 +596,12 @@ fArt.addEventListener('blur', async ()=>{
     fd.append('artikelnr', art);
 
     log("Upload startet …");
-    setPill(true, "Foto wird hochgeladen …");
-    try{ btnPhoto.disabled = true; }catch(e){}
-    // Sofort in die Strip-Vorschau (local preview)
-    try{
-      const tmp = document.createElement("div");
-      tmp.style.position="relative";
-      const im = document.createElement("img");
-      im.src = URL.createObjectURL(file);
-      im.style.opacity = "0.6";
-      tmp.appendChild(im);
-      const badge = document.createElement("div");
-      badge.textContent = "…";
-      badge.style.position="absolute";
-      badge.style.right="4px";
-      badge.style.bottom="4px";
-      badge.style.fontSize="12px";
-      badge.style.padding="2px 6px";
-      badge.style.borderRadius="999px";
-      badge.style.background="rgba(0,0,0,.55)";
-      tmp.appendChild(badge);
-      imgStrip.prepend(tmp);
-    }catch(e){}
+    setPill(true, "Upload …");
 
     const res = await fetch('/api/upload', { method:'POST', body: fd });
     const j = await res.json();
     if(!res.ok || !j.ok){
       setPill(false);
-      try{ btnPhoto.disabled = false; }catch(e){}
       alert("Upload Fehler: " + (j.error || res.status));
       return;
     }
@@ -661,8 +610,6 @@ fArt.addEventListener('blur', async ()=>{
     toast("Foto hochgeladen");
     await refreshImages();
     await pollUntilDone(art, 18000);
-    setPill(false);
-    try{ btnPhoto.disabled = false; }catch(e){}
   });
 
   btnDescribe.onclick = async ()=>{
@@ -702,7 +649,7 @@ fArt.addEventListener('blur', async ()=>{
     selectedFilename = "";
     if(btnSetCover) btnSetCover.classList.add("hidden");
     // Menge auf gespeicherten Default
-    try{ fMenge.value = "1"; }catch(e){}
+    try{ const s = loadSettings(); fMenge.value = String(s.menge ?? 1); }catch(e){}
     // Settings beibehalten (Defaults bleiben)
     if(typeof applyPriceMode === "function") applyPriceMode();
     statusText.textContent = "Bereit.";
@@ -713,26 +660,13 @@ fArt.addEventListener('blur', async ()=>{
 
 
   btnSave.onclick = async ()=>{
-  try{
     if(!validArtNr()) return alert("Artikelnummer muss mindestens 6-stellig sein.");
     const art = (fArt.value||"").trim();
     const s = loadSettings();
 
     const mengeVal = parseInt((fMenge.value||"1"),10) || 1;
 
-    // Validierung: Bezeichnung muss gesetzt sein
-    const titleNow = (fTitle.value||"").trim();
-    const onlyDots = /^\.{3,}$/.test(titleNow);
-    if(!titleNow || onlyDots){
-      toast("Bitte Bezeichnung ausfüllen");
-      fTitle.focus();
-      return;
-    }
-
-    // UI: Speichern sperren
-    btnSave.disabled = true;
-    btnSave.textContent = "Speichere …";
-const payload = {
+    const payload = {
       artikelnr: art,
       lagerort: (fLager.value||"").trim(),
 
@@ -765,15 +699,22 @@ const payload = {
       alert("Speichern Fehler: " + (j.error || res.status));
       return;
     }
-    toast("Gespeichert ✓");
-    try{ fMenge.value = "1"; }catch(e){}
-    try{ if(sUebernehmen) sUebernehmen.value = "1"; }catch(e){}
+    toast("Gespeichert");
     log("Gespeichert: " + art);
   
+
+    // Felder die IMMER zurückgesetzt werden sollen
+    try{
+      fMenge.value = "1";
+      if(sLagerstand) sLagerstand.value = "1";
+      if(sUebernehmen) sUebernehmen.value = "1";
+      const s2 = loadSettings();
+      s2.menge = 1; s2.lagerstand = 1; s2.uebernehmen = 1;
+      saveSettings(s2);
+      applySettingsToUI();
+    }catch(e){}
+
     goNextArticle();
-  } finally {
-    try{ btnSave.disabled = false; btnSave.textContent = "Artikel speichern"; }catch(e){}
-  }
 };
 
   window.addEventListener('DOMContentLoaded', ()=>{
@@ -797,27 +738,6 @@ const payload = {
     if(window.lucide) lucide.createIcons();
 
     applySettingsToUI();
-    // Auto-Defaults: Einlieferer-ID / Mitarbeiter / Sortiment / Angeliefert / Betriebsmittel merken (Menge & Uebernehmen NICHT)
-    function persistDefaults(){
-      const s = loadSettings();
-      s.einlieferer_id = (sEinl.value||"").trim();
-      s.mitarbeiter = (sMit.value||"").trim();
-      s.lagerstand = parseInt((sLagerstand.value||"1"),10) || 1;
-      s.sortiment = sSortiment ? (sSortiment.value||"").trim() : "";
-      s.angeliefert = (sAngeliefert.value||"").trim();
-      s.betriebsmittel = (sBetriebsmittel.value||"").trim();
-      // immer reset
-      s.menge = 1;
-      s.uebernehmen = 1;
-      saveSettings(s);
-      applySettingsToUI();
-    }
-    [sEinl, sMit, sLagerstand, sAngeliefert, sBetriebsmittel, sSortiment].forEach(el=>{
-      if(!el) return;
-      el.addEventListener('change', persistDefaults);
-      el.addEventListener('input', persistDefaults);
-    });
-
     applyPriceMode();
     loadSortimente();
 
@@ -845,55 +765,13 @@ const payload = {
     btnSettings.onclick = toggleSettings;
 
     if(sSortiment){
-      sSortiment.onchange = ()=>{ const s=readSettingsFromUI(); saveSettings(s); applySettingsToUI();
-    // Auto-Defaults: Einlieferer-ID / Mitarbeiter / Sortiment / Angeliefert / Betriebsmittel merken (Menge & Uebernehmen NICHT)
-    function persistDefaults(){
-      const s = loadSettings();
-      s.einlieferer_id = (sEinl.value||"").trim();
-      s.mitarbeiter = (sMit.value||"").trim();
-      s.lagerstand = parseInt((sLagerstand.value||"1"),10) || 1;
-      s.sortiment = sSortiment ? (sSortiment.value||"").trim() : "";
-      s.angeliefert = (sAngeliefert.value||"").trim();
-      s.betriebsmittel = (sBetriebsmittel.value||"").trim();
-      // immer reset
-      s.menge = 1;
-      s.uebernehmen = 1;
-      saveSettings(s);
-      applySettingsToUI();
-    }
-    [sEinl, sMit, sLagerstand, sAngeliefert, sBetriebsmittel, sSortiment].forEach(el=>{
-      if(!el) return;
-      el.addEventListener('change', persistDefaults);
-      el.addEventListener('input', persistDefaults);
-    });
- };
+      sSortiment.onchange = ()=>{ const s=readSettingsFromUI(); saveSettings(s); applySettingsToUI(); };
     }
 
     btnSettingsSave.onclick = ()=>{
       const ns = readSettingsFromUI();
       saveSettings(ns);
       applySettingsToUI();
-    // Auto-Defaults: Einlieferer-ID / Mitarbeiter / Sortiment / Angeliefert / Betriebsmittel merken (Menge & Uebernehmen NICHT)
-    function persistDefaults(){
-      const s = loadSettings();
-      s.einlieferer_id = (sEinl.value||"").trim();
-      s.mitarbeiter = (sMit.value||"").trim();
-      s.lagerstand = parseInt((sLagerstand.value||"1"),10) || 1;
-      s.sortiment = sSortiment ? (sSortiment.value||"").trim() : "";
-      s.angeliefert = (sAngeliefert.value||"").trim();
-      s.betriebsmittel = (sBetriebsmittel.value||"").trim();
-      // immer reset
-      s.menge = 1;
-      s.uebernehmen = 1;
-      saveSettings(s);
-      applySettingsToUI();
-    }
-    [sEinl, sMit, sLagerstand, sAngeliefert, sBetriebsmittel, sSortiment].forEach(el=>{
-      if(!el) return;
-      el.addEventListener('change', persistDefaults);
-      el.addEventListener('input', persistDefaults);
-    });
-
       settingsPanel.classList.add('hidden');
       btnSettings.textContent = "⚙️ Einstellungen";
       toast("Einstellungen gespeichert");
@@ -904,27 +782,6 @@ const payload = {
       s.price_system_enabled = (s.price_system_enabled === false) ? true : false;
       saveSettings(s);
       applySettingsToUI();
-    // Auto-Defaults: Einlieferer-ID / Mitarbeiter / Sortiment / Angeliefert / Betriebsmittel merken (Menge & Uebernehmen NICHT)
-    function persistDefaults(){
-      const s = loadSettings();
-      s.einlieferer_id = (sEinl.value||"").trim();
-      s.mitarbeiter = (sMit.value||"").trim();
-      s.lagerstand = parseInt((sLagerstand.value||"1"),10) || 1;
-      s.sortiment = sSortiment ? (sSortiment.value||"").trim() : "";
-      s.angeliefert = (sAngeliefert.value||"").trim();
-      s.betriebsmittel = (sBetriebsmittel.value||"").trim();
-      // immer reset
-      s.menge = 1;
-      s.uebernehmen = 1;
-      saveSettings(s);
-      applySettingsToUI();
-    }
-    [sEinl, sMit, sLagerstand, sAngeliefert, sBetriebsmittel, sSortiment].forEach(el=>{
-      if(!el) return;
-      el.addEventListener('change', persistDefaults);
-      el.addEventListener('input', persistDefaults);
-    });
-
       applyPriceMode();
     };
 
@@ -935,27 +792,6 @@ const payload = {
         s.hide_listprice = (s.hide_listprice === true) ? false : true;
         saveSettings(s);
         applySettingsToUI();
-    // Auto-Defaults: Einlieferer-ID / Mitarbeiter / Sortiment / Angeliefert / Betriebsmittel merken (Menge & Uebernehmen NICHT)
-    function persistDefaults(){
-      const s = loadSettings();
-      s.einlieferer_id = (sEinl.value||"").trim();
-      s.mitarbeiter = (sMit.value||"").trim();
-      s.lagerstand = parseInt((sLagerstand.value||"1"),10) || 1;
-      s.sortiment = sSortiment ? (sSortiment.value||"").trim() : "";
-      s.angeliefert = (sAngeliefert.value||"").trim();
-      s.betriebsmittel = (sBetriebsmittel.value||"").trim();
-      // immer reset
-      s.menge = 1;
-      s.uebernehmen = 1;
-      saveSettings(s);
-      applySettingsToUI();
-    }
-    [sEinl, sMit, sLagerstand, sAngeliefert, sBetriebsmittel, sSortiment].forEach(el=>{
-      if(!el) return;
-      el.addEventListener('change', persistDefaults);
-      el.addEventListener('input', persistDefaults);
-    });
-
         applyPriceMode();
       };
     }
@@ -967,23 +803,6 @@ const payload = {
       btnSettings.textContent = "⬆️ Einstellungen";
     }
   });
-
-// Admin-Passwort-Flow
-(function(){
-  const a = document.getElementById('btn-admin');
-  if(!a) return;
-  a.addEventListener('click', function(ev){
-    ev.preventDefault();
-    let token = (localStorage.getItem('admin_token') || '').trim();
-    if(!token){
-      token = prompt('Admin Passwort:') || '';
-      token = token.trim();
-      if(!token) return;
-      localStorage.setItem('admin_token', token);
-    }
-    window.location.href = '/admin?token=' + encodeURIComponent(token);
-  });
-})();
 </script>
 </body>
 </html>
