@@ -18,6 +18,7 @@ from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, Request, R
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+import requests
 
 
 
@@ -71,20 +72,35 @@ RAW_DIR.mkdir(parents=True, exist_ok=True)
 PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
-EXPORT_CSV = EXPORT_DIR / "eartikel_export.csv"
+EXPORT_CSV = EXPORT_DIR / "artikel_export.csv"
 
 
 # ----------------------------
 # CSV Export helpers (UTF-8 BOM + schneller Update)
 # ----------------------------
-CSV_HEADERS = ["ArtikelNr","Menge","Bezeichnung","Beschreibung","Preis","Lagerort","Lagerstand","uebernehmen","Einlieferer-ID","angeliefert","Betriebsmittel"]
+CSV_FIELDS = [
+    "ArtikelNr",
+    "Menge",
+    "Titel",
+    "Beschreibung",
+    "Preis",
+    "Lagerort",
+    "Lagerstand",
+    "Uebernehmen",
+    "EinliefererID",
+    "Angeliefert",
+    "Betriebsmittel",
+    "Mitarbeiter",
+]
+CSV_HEADERS = CSV_FIELDS
 
-def _format_price_1dp(val: Any) -> str:
+def _format_rufpreis(val: Any) -> str:
+    """Rufpreis immer ohne . oder , (z.B. 1 statt 1.0)."""
     try:
-        f = float(val or 0)
+        f = float(str(val or 0).replace(",", "."))
     except Exception:
         f = 0.0
-    return f"{f:.1f}"
+    return str(int(round(f)))
 
 def _ensure_export_csv_exists() -> None:
     if not EXPORT_CSV.exists():
@@ -107,7 +123,7 @@ def _update_csv_row_for_art(artikelnr: str, meta: Dict[str, Any]) -> None:
     if raw.startswith(b"\xef\xbb\xbf"):
         raw = raw[3:]
     text = raw.decode("utf-8", errors="replace")
-    rdr = csv.reader(io.StringIO(text))
+    rdr = csv.reader(io.StringIO(text, delimiter=";"))
     rows = list(rdr)
 
     # Ensure headers
@@ -121,15 +137,15 @@ def _update_csv_row_for_art(artikelnr: str, meta: Dict[str, Any]) -> None:
     menge = int(meta.get("menge") or 1)
     titel = str(meta.get("titel") or "")
     beschr = str(meta.get("beschreibung") or "")
-    preis = _format_price_1dp(meta.get("rufpreis", 0))
+    preis = _format_rufpreis(meta.get("rufpreis", 0))
     lagerort = str(meta.get("lagerort") or "")
     lagerstand = int(meta.get("lagerstand") or 1)
     uebernehmen = int(meta.get("uebernehmen") or 1)
     einl = str(meta.get("einlieferer_id") or meta.get("einlieferer") or "")
     angel = str(meta.get("angeliefert") or "")
     betr = str(meta.get("betriebsmittel") or "")
-    new_row = [art, str(menge), titel, beschr, preis, lagerort, str(lagerstand), str(uebernehmen), einl, angel, betr]
-
+    mitarb = str(meta.get("mitarbeiter") or "")
+    new_row = [art, str(menge), titel, beschr, preis, lagerort, str(lagerstand), str(uebernehmen), einl, angel, betr, mitarb]
     # Replace or append
     out_rows = [rows[0]]
     replaced = False
@@ -144,7 +160,7 @@ def _update_csv_row_for_art(artikelnr: str, meta: Dict[str, Any]) -> None:
 
     # Write back with BOM
     bio = io.StringIO()
-    w = csv.writer(bio, delimiter=",", quotechar='"', quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
+    w = csv.writer(bio, delimiter=";", quotechar='"', quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
     for r in out_rows:
         w.writerow(r)
     EXPORT_CSV.write_bytes(("\ufeff" + bio.getvalue()).encode("utf-8"))
@@ -157,6 +173,186 @@ COST_PER_SUCCESS_CALL_EUR = float((os.getenv("KI_COST_PER_SUCCESS_CALL_EUR", "0.
 
 app.mount("/static", StaticFiles(directory=str(BASE_DIR)), name="static")
 
+
+# ----------------------------
+# Google Drive Backup (Render Free, ohne Disk)
+# ----------------------------
+GDRIVE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "").strip()
+GDRIVE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "").strip()
+GDRIVE_REFRESH_TOKEN = os.getenv("GOOGLE_REFRESH_TOKEN", "").strip()
+GDRIVE_FOLDER_NAME = (os.getenv("DRIVE_FOLDER_NAME", "MyAuktion-Backups") or "MyAuktion-Backups").strip()
+GDRIVE_RETENTION_DAYS = int(os.getenv("DRIVE_RETENTION_DAYS", "30") or "30")
+
+_gdrive_cache = {"folder_id": None, "name_to_id": {}, "last_cleanup": None}
+
+def _gdrive_enabled() -> bool:
+    return bool(GDRIVE_CLIENT_ID and GDRIVE_CLIENT_SECRET and GDRIVE_REFRESH_TOKEN)
+
+def _gdrive_access_token() -> str:
+    r = requests.post(
+        "https://oauth2.googleapis.com/token",
+        data={
+            "client_id": GDRIVE_CLIENT_ID,
+            "client_secret": GDRIVE_CLIENT_SECRET,
+            "refresh_token": GDRIVE_REFRESH_TOKEN,
+            "grant_type": "refresh_token",
+        },
+        timeout=30,
+    )
+    r.raise_for_status()
+    return r.json()["access_token"]
+
+def _gdrive_headers(token: str) -> Dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+def _gdrive_find_folder(token: str, name: str) -> Optional[str]:
+    # Find folder created by this app (drive.file scope)
+    q = f"mimeType='application/vnd.google-apps.folder' and name='{name}' and trashed=false"
+    r = requests.get(
+        "https://www.googleapis.com/drive/v3/files",
+        headers=_gdrive_headers(token),
+        params={"q": q, "fields": "files(id,name)"},
+        timeout=30,
+    )
+    r.raise_for_status()
+    files = r.json().get("files", [])
+    return files[0]["id"] if files else None
+
+def _gdrive_create_folder(token: str, name: str) -> str:
+    meta = {"name": name, "mimeType": "application/vnd.google-apps.folder"}
+    r = requests.post(
+        "https://www.googleapis.com/drive/v3/files",
+        headers={**_gdrive_headers(token), "Content-Type": "application/json"},
+        json=meta,
+        timeout=30,
+    )
+    r.raise_for_status()
+    return r.json()["id"]
+
+def _gdrive_get_folder_id(token: str) -> str:
+    if _gdrive_cache["folder_id"]:
+        return _gdrive_cache["folder_id"]
+    fid = _gdrive_find_folder(token, GDRIVE_FOLDER_NAME)
+    if not fid:
+        fid = _gdrive_create_folder(token, GDRIVE_FOLDER_NAME)
+    _gdrive_cache["folder_id"] = fid
+    return fid
+
+def _gdrive_find_file_in_folder(token: str, folder_id: str, filename: str) -> Optional[str]:
+    # cache
+    if filename in _gdrive_cache["name_to_id"]:
+        return _gdrive_cache["name_to_id"][filename]
+    q = f"'{folder_id}' in parents and name='{filename}' and trashed=false"
+    r = requests.get(
+        "https://www.googleapis.com/drive/v3/files",
+        headers=_gdrive_headers(token),
+        params={"q": q, "fields": "files(id,name)"},
+        timeout=30,
+    )
+    r.raise_for_status()
+    files = r.json().get("files", [])
+    if not files:
+        return None
+    fid = files[0]["id"]
+    _gdrive_cache["name_to_id"][filename] = fid
+    return fid
+
+def _gdrive_upload_bytes(token: str, folder_id: str, filename: str, data: bytes, mimetype: str) -> str:
+    import uuid
+    boundary = "===============" + uuid.uuid4().hex
+    metadata = {"name": filename, "parents": [folder_id]}
+    body = (
+        f"--{boundary}\r\n"
+        "Content-Type: application/json; charset=UTF-8\r\n\r\n"
+        + json.dumps(metadata)
+        + "\r\n"
+        f"--{boundary}\r\n"
+        f"Content-Type: {mimetype}\r\n\r\n"
+    ).encode("utf-8") + data + f"\r\n--{boundary}--\r\n".encode("utf-8")
+
+    existing_id = _gdrive_find_file_in_folder(token, folder_id, filename)
+    if existing_id:
+        url = f"https://www.googleapis.com/upload/drive/v3/files/{existing_id}"
+        r = requests.patch(
+            url,
+            headers={**_gdrive_headers(token), "Content-Type": f"multipart/related; boundary={boundary}"},
+            params={"uploadType": "multipart"},
+            data=body,
+            timeout=60,
+        )
+        r.raise_for_status()
+        fid = r.json()["id"]
+    else:
+        url = "https://www.googleapis.com/upload/drive/v3/files"
+        r = requests.post(
+            url,
+            headers={**_gdrive_headers(token), "Content-Type": f"multipart/related; boundary={boundary}"},
+            params={"uploadType": "multipart"},
+            data=body,
+            timeout=60,
+        )
+        r.raise_for_status()
+        fid = r.json()["id"]
+    _gdrive_cache["name_to_id"][filename] = fid
+    return fid
+
+def _gdrive_cleanup_old(token: str, folder_id: str) -> None:
+    # run max 1x per day
+    today = time.strftime("%Y-%m-%d")
+    if _gdrive_cache["last_cleanup"] == today:
+        return
+    cutoff_ts = time.time() - (GDRIVE_RETENTION_DAYS * 86400)
+    cutoff_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(cutoff_ts))
+    q = f"'{folder_id}' in parents and modifiedTime < '{cutoff_iso}' and trashed=false"
+    page_token = None
+    while True:
+        params = {"q": q, "fields": "nextPageToken,files(id,name,modifiedTime)", "pageSize": 1000}
+        if page_token:
+            params["pageToken"] = page_token
+        r = requests.get("https://www.googleapis.com/drive/v3/files", headers=_gdrive_headers(token), params=params, timeout=60)
+        r.raise_for_status()
+        js = r.json()
+        files = js.get("files", [])
+        for f in files:
+            try:
+                requests.delete(f"https://www.googleapis.com/drive/v3/files/{f['id']}", headers=_gdrive_headers(token), timeout=30).raise_for_status()
+            except Exception:
+                pass
+        page_token = js.get("nextPageToken")
+        if not page_token:
+            break
+    _gdrive_cache["last_cleanup"] = today
+
+def _gdrive_backup_article(artikelnr: str) -> None:
+    if not _gdrive_enabled():
+        return
+    try:
+        token = _gdrive_access_token()
+        folder_id = _gdrive_get_folder_id(token)
+        # cleanup old (daily)
+        _gdrive_cleanup_old(token, folder_id)
+
+        # Upload/Update daily CSV
+        day = time.strftime("%Y-%m-%d")
+        daily_name = f"artikel_export_{day}.csv"
+        # ensure current CSV exists
+        _ensure_export_csv_exists()
+        csv_bytes = EXPORT_CSV.read_bytes()
+        _gdrive_upload_bytes(token, folder_id, daily_name, csv_bytes, "text/csv")
+
+        # Upload images for article (processed preferred, else raw)
+        pics = sorted(PROCESSED_DIR.glob(f"{artikelnr}_*.jpg"))
+        if not pics:
+            pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
+        for p in pics:
+            # determine index from suffix _N
+            m = re.search(r"_(\d+)\.jpg$", p.name)
+            idx = m.group(1) if m else "1"
+            gname = f"{artikelnr}_{idx}.jpg"
+            _gdrive_upload_bytes(token, folder_id, gname, p.read_bytes(), "image/jpeg")
+    except Exception:
+        # Backup darf nie das Speichern blockieren
+        return
 
 # ----------------------------
 # Admin Auth
@@ -284,6 +480,8 @@ CSV_FIELDS = [
 ]
 
 
+
+CSV_HEADERS = CSV_FIELDS
 def _rebuild_csv_export() -> None:
     rows = []
     for meta_file in RAW_DIR.glob("*.json"):
@@ -472,7 +670,7 @@ def export_csv(from_nr: str | None = None, to_nr: str | None = None):
             str(int(meta.get("menge") or 1)),
             str(meta.get("titel") or ""),
             str(meta.get("beschreibung") or ""),
-            _format_price_1dp(meta.get("rufpreis", 0)),
+            _format_rufpreis(meta.get("rufpreis", 0)),
             str(meta.get("lagerort") or ""),
             str(int(meta.get("lagerstand") or 1)),
             str(int(meta.get("uebernehmen") or 1)),
@@ -482,7 +680,7 @@ def export_csv(from_nr: str | None = None, to_nr: str | None = None):
         ])
 
     bio = io.StringIO()
-    w = csv.writer(bio, delimiter=",", quotechar='"', quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
+    w = csv.writer(bio, delimiter=";", quotechar='"', quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
     w.writerow(CSV_HEADERS)
     for r in rows:
         w.writerow(r)
@@ -557,7 +755,7 @@ def images(artikelnr: str):
     files = []
     for f in sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg")):
         rel = f.relative_to(BASE_DIR)
-        files.append("/static/" + str(rel).replace(os.sep, "/"))
+        files.append("/static/" + str(rel).replace("\\", "/"))
     return {"ok": True, "files": files}
 
 
@@ -624,7 +822,7 @@ def meta(artikelnr: str):
     img_url = ""
     if pics:
         rel = pics[-1].relative_to(BASE_DIR)
-        img_url = "/static/" + str(rel).replace(os.sep, "/")
+        img_url = "/static/" + str(rel).replace("\\", "/")
 
     return {
         "ok": True,
@@ -665,6 +863,7 @@ def save(data: Dict[str, Any]):
     if "einlieferer_id" in data: mj["einlieferer_id"] = str(data.get("einlieferer_id") or "")
     if "angeliefert" in data: mj["angeliefert"] = str(data.get("angeliefert") or "")
     if "betriebsmittel" in data: mj["betriebsmittel"] = str(data.get("betriebsmittel") or "")
+    if "mitarbeiter" in data: mj["mitarbeiter"] = str(data.get("mitarbeiter") or "")
 
     # Preise (falls manuell angepasst)
     if "retail_price" in data:
@@ -685,6 +884,13 @@ def save(data: Dict[str, Any]):
     except Exception:
         # Fallback: wenn irgendwas schiefgeht, einmal komplett rebuild
         _rebuild_csv_export()
+
+    # Google Drive Backup (best-effort)
+    try:
+        _gdrive_backup_article(artikelnr)
+    except Exception:
+        pass
+
 
     return {"ok": True}
 
@@ -791,7 +997,7 @@ def admin_articles(request: Request, category: str = "", only_failed: int = 0):
         img_url = ""
         if pics:
             rel = pics[-1].relative_to(BASE_DIR)
-            img_url = "/static/" + str(rel).replace(os.sep, "/")
+            img_url = "/static/" + str(rel).replace("\\", "/")
 
         items.append({
             "artikelnr": nr,
