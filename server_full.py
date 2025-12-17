@@ -36,6 +36,7 @@ from pathlib import Path
 from PIL import Image, ImageOps
 import io, json, time, csv, math, os
 import re
+import os
 from typing import Any, Dict, Optional, Tuple
 
 app = FastAPI()
@@ -71,20 +72,38 @@ RAW_DIR.mkdir(parents=True, exist_ok=True)
 PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
-EXPORT_CSV = EXPORT_DIR / "eartikel_export.csv"
+EXPORT_CSV = EXPORT_DIR / "artikel_export.csv"
 
 
 # ----------------------------
 # CSV Export helpers (UTF-8 BOM + schneller Update)
 # ----------------------------
+CSV_FIELDS = [
+    "ArtikelNr",
+    "Menge",
+    "Titel",
+    "Beschreibung",
+    "Preis",          # Rufpreis (ohne . oder ,)
+    "Lagerort",
+    "Lagerstand",
+    "Uebernehmen",
+    "EinliefererID",
+    "Angeliefert",
+    "Betriebsmittel",
+    "Mitarbeiter",
+]
+
 CSV_HEADERS = CSV_FIELDS
 
-def _format_price_1dp(val: Any) -> str:
+def _format_rufpreis(val: Any) -> str:
+    """Rufpreis immer ohne . oder , (z.B. 40 statt 40.0)."""
     try:
-        f = float(val or 0)
+        f = float(str(val).replace(",", "."))
     except Exception:
         f = 0.0
-    return f"{f:.1f}"
+    # sauber runden und als int ausgeben
+    return str(int(round(f)))
+
 
 def _ensure_export_csv_exists() -> None:
     if not EXPORT_CSV.exists():
@@ -121,7 +140,7 @@ def _update_csv_row_for_art(artikelnr: str, meta: Dict[str, Any]) -> None:
     menge = int(meta.get("menge") or 1)
     titel = str(meta.get("titel") or "")
     beschr = str(meta.get("beschreibung") or "")
-    preis = _format_price_1dp(meta.get("rufpreis", 0))
+    preis = _format_rufpreis(meta.get("rufpreis", 0))
     lagerort = str(meta.get("lagerort") or "")
     lagerstand = int(meta.get("lagerstand") or 1)
     uebernehmen = int(meta.get("uebernehmen") or 1)
@@ -476,7 +495,7 @@ def export_csv(from_nr: str | None = None, to_nr: str | None = None):
             str(int(meta.get("menge") or 1)),
             str(meta.get("titel") or ""),
             str(meta.get("beschreibung") or ""),
-            _format_price_1dp(meta.get("rufpreis", 0)),
+            _format_rufpreis(meta.get("rufpreis", 0)),
             str(meta.get("lagerort") or ""),
             str(int(meta.get("lagerstand") or 1)),
             str(int(meta.get("uebernehmen") or 1)),
