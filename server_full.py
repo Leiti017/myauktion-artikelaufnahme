@@ -1,846 +1,1293 @@
-<!doctype html>
-<html lang="de">
-<head>
-  <!-- build:NEXT_ARTICLE_20251215_193134 -->
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>MyAuktion · Artikelaufnahme</title>
+# server_full.py – MyAuktion KI-Artikelaufnahme-System (FINAL)
+# Features:
+# - Upload + sofortige Vorschau (Frontend)
+# - Mehrere Fotos pro Artikel
+# - Hintergrund-KI (OpenAI Vision) -> Titel, Beschreibung, Kategorie, Listenpreis
+# - Rufpreis = 20% vom Listenpreis, IMMER auf ganze € aufrunden
+# - Bei Upload wird KI automatisch neu gestartet (auch bei Foto 2/3/…)
+# - Polling kann auf "genau dieses Foto" warten (filename)
+# - Kein KI-Fallback-Text: bei Fehler -> ki_source="failed"
+# - Live-Check Artikelnummer: /api/check_artnr
+# - Foto löschen: /api/delete_image
+# - CSV Export (inkl. Kategorie)
+# - Admin-Only Budget/Flags (Token geschützt): /api/admin/budget /api/admin/articles
+#
+# Start:
+#   python -m uvicorn server_full:app --host 0.0.0.0 --port 5050
+from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, Request, Response
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+import requests
 
-<!-- FAVICONS & APP ICONS -->
-<link rel="icon" href="/static/favicon.ico">
-<link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
-<link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
 
-<link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
 
-<link rel="icon" type="image/png" sizes="192x192" href="/static/android-chrome-192x192.png">
-<link rel="icon" type="image/png" sizes="512x512" href="/static/android-chrome-512x512.png">
+def _normalize_title(title: str) -> str:
+    t = (title or "").strip()
+    bad = {"Typenbezeichnung","typenbezeichnung","Typ","typ","Type","type","Model","model","Modell","modell"}
+    parts = [p for p in re.split(r"\s+", t) if p]
+    while parts and parts[-1] in bad:
+        parts.pop()
+    t = " ".join(parts).strip()
+    t = re.sub(r"\bTypenbezeichnung\b", "", t, flags=re.I)
+    t = re.sub(r"\s{2,}", " ", t).strip()
+    return t
 
-<meta name="theme-color" content="#1d4ed8">
+from pathlib import Path
+from PIL import Image, ImageOps
+import io, json, time, csv, math, os, datetime
+import re
+from typing import Any, Dict, Optional, Tuple
 
-  <script defer src="https://unpkg.com/lucide@latest"></script>
-  <script src="https://cdn.tailwindcss.com"></script>
+app = FastAPI()
 
-  <style>
-    :root { color-scheme: light dark; }
-    body{
-      min-height:100vh;
-      background:
-        radial-gradient(1200px 600px at 80% -10%, #e7f1ff 0%, transparent 60%),
-        linear-gradient(135deg,#0ea5e9,#1d4ed8 60%,#1e293b);
-      color:#fff;
-    }
-    .glass{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.16);backdrop-filter:blur(12px)}
-    .btn{padding:.55rem 1rem;border-radius:999px;font-weight:700;display:inline-flex;align-items:center;gap:.45rem}
-    .btn-primary{background:#fff;color:#0f172a;box-shadow:0 8px 18px rgba(0,0,0,.2)}
-    .btn-ghost{color:#fff;border:1px solid rgba(255,255,255,.35);background:transparent}
-    .btn-danger{color:#fff;border:1px solid rgba(239,68,68,.85);background:rgba(239,68,68,.22)}
-    .input, select{
-      width:100%;padding:.55rem .9rem;border-radius:.75rem;background:rgba(255,255,255,.96);
-      color:#0f172a;outline:none;border:1px solid transparent;font-size:.9rem
-    }
-    textarea{
-      width:100%;min-height:140px;padding:.6rem .9rem;border-radius:.75rem;
-      background:rgba(255,255,255,.96)!important;color:#0f172a!important;
-      outline:none;border:1px solid transparent;font-size:.9rem;resize:vertical
-    }
-    .thumb{
-      border-radius:1rem;border:1px dashed rgba(255,255,255,.4);
-      min-height:190px;display:flex;align-items:center;justify-content:center;
-      overflow:hidden;background:rgba(15,23,42,.35);cursor:pointer
-    }
-    .thumb img{max-width:100%;max-height:100%;display:block}
-    .img-strip img{height:58px;border-radius:.75rem;border:1px solid rgba(255,255,255,.3);cursor:pointer}
-    .pill{font-size:.75rem;padding:.2rem .6rem;border-radius:999px;border:1px solid rgba(255,255,255,.3);display:inline-flex;gap:.3rem;align-items:center}
-    .dot{width:7px;height:7px;border-radius:999px;background:#22c55e}
-    .toast-wrap{position:fixed;top:12px;right:12px;z-index:50;display:flex;flex-direction:column;gap:8px}
-    .toast{background:#fff;color:#0f172a;border-radius:999px;padding:7px 12px;font-weight:700;box-shadow:0 10px 30px rgba(0,0,0,.18);opacity:0;transform:translateY(-6px) scale(.94);transition:.18s}
-    .toast.show{opacity:1;transform:translateY(0) scale(1)}
-    .price-off{border:2px solid rgba(239,68,68,.9)!important;background:rgba(254,242,242,.95)!important}
-  </style>
-</head>
+@app.middleware("http")
+async def _no_cache_html(request, call_next):
+    resp = await call_next(request)
+    try:
+        ct = resp.headers.get("content-type", "")
+        if ct.startswith("text/html") or request.url.path in ("/", "/index.html", "/admin", "/articles") or request.url.path.endswith(("manifest.webmanifest","manifest.json")) or request.url.path.startswith("/static/uploads/"):
+            resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+            resp.headers["Pragma"] = "no-cache"
+            resp.headers["Expires"] = "0"
+    except Exception:
+        pass
+    return resp
 
-<body class="text-white">
-<div id="toast-wrap" class="toast-wrap"></div>
 
-<div class="max-w-5xl mx-auto px-4 py-5 md:py-8">
-  <header class="flex items-center justify-between gap-4 mb-6">
-    <div class="flex items-center gap-3">
-      <div class="w-11 h-11 rounded-full bg-white shadow-lg flex items-center justify-center overflow-hidden">
-        <img src="/static/myauktion_logo.png" alt="MyAuktion" class="max-w-[34px] max-h-[34px]" onerror="this.style.display=\'none\'; this.parentElement.innerHTML=\'<span class=&quot;text-slate-900 font-black&quot;>MG</span>\'">
-      </div>
-      <div>
-        <div class="text-xl md:text-2xl font-bold tracking-tight flex items-center gap-2">
-          MyAuktion <span class="text-sm font-semibold opacity-90">· Artikelaufnahme</span>
-        </div>
-        <div class="text-xs md:text-sm text-white/80">BEI UNS BESTIMMST DU DEN PREIS!</div>
-      </div>
-    </div>
-    <div class="flex items-center gap-4 text-sm opacity-90"><a href="/admin" class="underline">Admin</a><a href="/articles" class="underline">Gesamtartikel</a></div>
-  </header>
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-  <main class="glass rounded-3xl p-4 md:p-6 shadow-xl">
-    <div class="grid md:grid-cols-2 gap-5">
-      <!-- LINKS -->
-      <section>
-        <div class="flex items-center justify-between mb-2">
-          <h2 class="text-lg font-semibold">1. Artikel erfassen</h2>
-          <button id="btn-settings" type="button" class="btn btn-ghost text-xs">⚙️ Einstellungen</button>
-        </div>
+BASE_DIR = Path(__file__).resolve().parent
 
-        <!-- ⚙️ EINSTELLUNGEN -->
-        <div id="settings-panel" class="glass rounded-2xl p-3 mb-3 hidden">
-          <div class="text-[11px] text-white/80 mb-2">
-            Startwerte (werden gespeichert und bei jedem Artikel automatisch übernommen)
-          </div>
+RAW_DIR = BASE_DIR / "uploads" / "raw"
+PROCESSED_DIR = BASE_DIR / "uploads" / "processed"
+EXPORT_DIR = BASE_DIR / "export"
+RAW_DIR.mkdir(parents=True, exist_ok=True)
+PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label class="block mb-1 text-xs opacity-80">Einlieferer-ID</label>
-              <select id="s-einlieferer-id" class="input">
-                <option value="22" selected>22</option>
-                <option value="55">55</option>
-                <option value="66">66</option>
-                <option value="65461">65461</option>
-              </select>
-            </div>
+EXPORT_CSV = EXPORT_DIR / "artikel_export.csv"
 
-            <div>
-              <label class="block mb-1 text-xs opacity-80">Mitarbeiter</label>
-              <select id="s-mitarbeiter" class="input">
-                <option>Jan</option><option>Rene</option><option>Karin</option><option>Katharina</option>
-                <option>Linda</option><option>Jasmin</option><option>Natascha</option><option>Gast1</option><option>Gast2</option><option>Gast3</option>
-              </select>
-            </div>
-            <div>
-              <label class="block mb-1 text-xs opacity-80">Sortiment</label>
-              <select id="s-sortiment" class="input">
-                <option value="">(kein Sortiment)</option>
-              </select>
-            </div>
-            <div>
-              <label class="block mb-1 text-xs opacity-80">Lagerstand</label>
-              <input id="s-lagerstand" type="number" class="input" value="1" min="1">
-            </div>
 
-            <div>
-              <label class="block mb-1 text-xs opacity-80">Übernehmen</label>
-              <input id="s-uebernehmen" type="number" class="input" value="1" min="0">
-            </div>
+# ----------------------------
+# CSV Export helpers (UTF-8 BOM + schneller Update)
+# ----------------------------
+CSV_FIELDS = [
+    "ArtikelNr",
+    "Bezeichnung",
+    "Beschreibung",
+    "Menge",
+    "Preis",
+    "Ladenpreis",
+    "Lagerort",
+    "Lagerstand",
+    "Uebernehmen",
+    "Sortiment",
+    "Einlieferer-ID",
+    "Angeliefert",
+    "Betriebsmittel",
+    "Mitarbeiter",
+]
+CSV_HEADERS = CSV_FIELDS
 
-            <div>
-              <label class="block mb-1 text-xs opacity-80">Angeliefert (Datum)</label>
-              <input id="s-angeliefert" type="date" class="input">
-            </div>
+def _format_rufpreis(val: Any) -> str:
+    """Rufpreis immer ohne . oder , (z.B. 1 statt 1.0)."""
+    try:
+        f = float(str(val or 0).replace(",", "."))
+    except Exception:
+        f = 0.0
+    return str(int(round(f)))
 
-            <div class="sm:col-span-2">
-              <label class="block mb-1 text-xs opacity-80">Betriebsmittel</label>
-              <input id="s-betriebsmittel" type="text" class="input" placeholder="Rollwagen X…">
-            </div>
-          </div>
 
-          <div class="flex justify-end mt-3">
-            <button id="btn-settings-save" class="btn btn-primary text-xs">Speichern</button>
-          </div>
-        </div>
+def _format_ladenpreis(val: Any) -> str:
+    """Listenpreis (= Ladenpreis) im Export mit Komma, z.B. 199,99; 0 => leer."""
+    try:
+        f = float(str(val or 0).replace(",", "."))
+    except Exception:
+        f = 0.0
+    return (f"{f:.2f}".replace(".", ",") if f else "")
 
-        <div id="settings-mini" class="text-[11px] text-white/80 mb-3"></div>
+def _ensure_export_csv_exists() -> None:
+    if not EXPORT_CSV.exists():
+        _rebuild_csv_export()
+        # rewrite once with BOM + correct header order if needed
+        try:
+            txt = EXPORT_CSV.read_text("utf-8")
+            EXPORT_CSV.write_bytes(("\ufeff" + txt).encode("utf-8"))
+        except Exception:
+            pass
 
-        <!-- HAUPTMASKE -->
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
-          <div>
-            <label class="block mb-1 text-xs opacity-80">Artikelnr. (min. 6-stellig)</label>
-            <input id="f-artikelnr" type="number" inputmode="numeric" class="input" autocomplete="off" placeholder="z.B. 810233">
-            <div id="artnr-hint" class="text-[11px] text-white/80 mt-1"></div>
-          </div>
-          <div>
-            <label class="block mb-1 text-xs opacity-80">Menge</label>
-            <input id="f-menge" type="number" class="input" value="1" min="1">
-          </div>
-          <div>
-            <label class="block mb-1 text-xs opacity-80">Lagerort</label>
-            <input id="f-lagerort" type="text" class="input" placeholder="z.B. (22) Haushalt/Freizeit 170">
-          </div>
-        </div>
+def _update_csv_row_for_art(artikelnr: str, meta: Dict[str, Any]) -> None:
+    """Update one row in export CSV without rebuilding everything."""
+    _ensure_export_csv_exists()
 
-        <input id="f-file" type="file" accept="image/*" capture="environment" class="hidden">
+    # Load existing rows
+    import csv, io
+    raw = EXPORT_CSV.read_bytes()
+    # strip BOM if present
+    if raw.startswith(b"\xef\xbb\xbf"):
+        raw = raw[3:]
+    text = raw.decode("utf-8", errors="replace")
+    rdr = csv.reader(io.StringIO(text, delimiter=";"))
+    rows = list(rdr)
 
-        <div class="thumb mb-2" id="thumb">
-          <span class="text-xs text-white/70 text-center">Tippen, um Foto aufzunehmen / auszuwählen</span>
-        </div>
+    # Ensure headers
+    if not rows:
+        rows = [CSV_HEADERS]
+    else:
+        rows[0] = CSV_HEADERS
 
-        <!-- (Listenpreis-Button ist rechts beim Preis-System) -->
+    art = str(artikelnr)
 
-        <div class="img-strip flex gap-2 overflow-x-auto pb-1" id="img-strip"></div>
+    bezeichnung = str(meta.get("titel") or "")
+    beschr = str(meta.get("beschreibung") or "")
+    menge = int(meta.get("menge") or 1)
+    preis = _format_rufpreis(meta.get("rufpreis", 0))
+    # Listenpreis (= Ladenpreis) im Export mit Komma
+    try:
+        lp = float(str(meta.get("retail_price") or 0).replace(",", "."))
+    except Exception:
+        lp = 0.0
+    ladenpreis = _format_ladenpreis(lp)
 
-        <div class="flex justify-end mt-2">
-          <button id="btn-set-cover" type="button" class="btn btn-ghost text-xs hidden">⭐ Als Titelbild setzen</button>
-        </div>
+    lagerort = str(meta.get("lagerort") or "")
+    lagerstand = int(meta.get("lagerstand") or 1)
+    uebernehmen = int(meta.get("uebernehmen") or 1)
+    sortiment = str(meta.get("sortiment") or "")
+    einl_id = str(meta.get("einlieferer_id") or meta.get("einlieferer") or "")
+    angel = str(meta.get("angeliefert") or "")
+    betr = str(meta.get("betriebsmittel") or "")
+    mitarb = str(meta.get("mitarbeiter") or "")
 
-        <div class="flex flex-col gap-2 mt-3">
-          <button id="btn-photo" class="btn btn-primary text-sm">
-            <i data-lucide="camera" class="w-4 h-4"></i> Foto auswählen
-          </button>
+    new_row = [
+        art,
+        bezeichnung,
+        beschr,
+        str(menge),
+        preis,
+        ladenpreis,
+        lagerort,
+        str(lagerstand),
+        str(uebernehmen),
+        sortiment,
+        einl_id,
+        angel,
+        betr,
+        mitarb,
+    ]
 
-          <button id="btn-delete-photo" class="btn btn-ghost text-sm">
-            <i data-lucide="trash-2" class="w-4 h-4"></i> Foto löschen
-          </button>
+    # Replace or append
+    out_rows = [rows[0]]
+    replaced = False
+    for r in rows[1:]:
+        if len(r) > 0 and r[0] == art:
+            out_rows.append(new_row)
+            replaced = True
+        else:
+            out_rows.append(r)
+    if not replaced:
+        out_rows.append(new_row)
 
-          <button id="btn-save" class="btn btn-ghost text-sm">
-            <i data-lucide="save" class="w-4 h-4"></i> Artikel speichern
-          </button>
-        </div>
+    # Write back with BOM
+    bio = io.StringIO()
+    w = csv.writer(bio, delimiter=";", quotechar='"', quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
+    for r in out_rows:
+        w.writerow(r)
+    EXPORT_CSV.write_bytes(("\ufeff" + bio.getvalue()).encode("utf-8"))
 
-        <div class="mt-3">
-          <div id="status-pill" class="pill hidden"><span class="dot"></span><span id="status-pill-text">KI läuft…</span></div>
-          <div id="status-text" class="text-[11px] text-white/80 mt-2">Bereit.</div>
-        </div>
-      </section>
+USAGE_JSON = EXPORT_DIR / "ki_usage.json"
 
-      <!-- RECHTS -->
-      <section>
-        <div class="flex items-center justify-between mb-2">
-          <h2 class="text-lg font-semibold">2. KI-Vorschlag</h2>
-          <button id="btn-describe" class="btn btn-ghost text-xs">⚡ KI neu berechnen</button>
-        </div>
+# Admin-Schutz (frei wählbar, NICHT OpenAI-Key)
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "").strip()  # leer => Admin offen (nur für Tests)
+DEFAULT_BUDGET_EUR = float((os.getenv("KI_BUDGET_EUR", "10") or "10").replace(",", "."))
+COST_PER_SUCCESS_CALL_EUR = float((os.getenv("KI_COST_PER_SUCCESS_CALL_EUR", "0.003") or "0.003").replace(",", "."))
 
-        <div class="mb-3">
-          <label class="block mb-1 text-xs opacity-80">Bezeichnung</label>
-          <input id="f-title" type="text" class="input" autocomplete="off">
-        </div>
+app.mount("/static", StaticFiles(directory=str(BASE_DIR)), name="static")
 
-        <div class="mb-3">
-          <label class="block mb-1 text-xs opacity-80">Beschreibung</label>
-          <textarea id="f-desc"></textarea>
-        </div>
 
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
-          <div id="retail-wrap">
-            <label class="block mb-1 text-xs opacity-80">Listenpreis (€)</label>
-            <input id="f-retail" type="number" class="input">
-          </div>
-          <div id="ruf-wrap">
-            <label class="block mb-1 text-xs opacity-80">Rufpreis</label>
-            <input id="f-ruf" type="number" class="input">
-          </div>
-        </div>
+# ----------------------------
+# Google Drive Backup (Render Free, ohne Disk)
+# ----------------------------
+GDRIVE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "").strip()
+GDRIVE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "").strip()
+GDRIVE_REFRESH_TOKEN = os.getenv("GOOGLE_REFRESH_TOKEN", "").strip()
+GDRIVE_FOLDER_NAME = (os.getenv("DRIVE_FOLDER_NAME", "MyAuktion-Backups") or "MyAuktion-Backups").strip()
+GDRIVE_RETENTION_DAYS = int(os.getenv("DRIVE_RETENTION_DAYS", "30") or "30")
 
-        <div class="flex justify-end gap-2 mb-3 flex-wrap">
-          <button id="btn-price-toggle" class="btn btn-ghost text-[11px]" type="button">Preis-System ausschalten</button>
-          <button id="btn-toggle-retail" class="btn btn-ghost text-[11px]" type="button">Listenpreis ausblenden</button>
-        </div>
+_gdrive_cache = {"folder_id": None, "name_to_id": {}, "last_cleanup": None}
 
-        <label class="block mb-1 text-xs opacity-80">System-Log</label>
-        <div id="log" class="text-[11px] text-slate-900 bg-white/90 rounded-xl p-2 max-h-40 overflow-y-auto"></div>
+def _gdrive_enabled() -> bool:
+    return bool(GDRIVE_CLIENT_ID and GDRIVE_CLIENT_SECRET and GDRIVE_REFRESH_TOKEN)
 
-              </section>
-    </div>
-  </main>
-</div>
+def _gdrive_access_token() -> str:
+    r = requests.post(
+        "https://oauth2.googleapis.com/token",
+        data={
+            "client_id": GDRIVE_CLIENT_ID,
+            "client_secret": GDRIVE_CLIENT_SECRET,
+            "refresh_token": GDRIVE_REFRESH_TOKEN,
+            "grant_type": "refresh_token",
+        },
+        timeout=30,
+    )
+    r.raise_for_status()
+    return r.json()["access_token"]
 
-<script>
-  const fArt = document.getElementById('f-artikelnr');
-  const artHint = document.getElementById('artnr-hint');
-  const fLager = document.getElementById('f-lagerort');
-  const fMenge = document.getElementById('f-menge');
+def _gdrive_headers(token: str) -> Dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
 
-  const fFile = document.getElementById('f-file');
-  const thumb = document.getElementById('thumb');
-  const imgStrip = document.getElementById('img-strip');
-  const btnSetCover = document.getElementById('btn-set-cover');
+def _gdrive_find_folder(token: str, name: str) -> Optional[str]:
+    # Find folder created by this app (drive.file scope)
+    q = f"mimeType='application/vnd.google-apps.folder' and name='{name}' and trashed=false"
+    r = requests.get(
+        "https://www.googleapis.com/drive/v3/files",
+        headers=_gdrive_headers(token),
+        params={"q": q, "fields": "files(id,name)"},
+        timeout=30,
+    )
+    r.raise_for_status()
+    files = r.json().get("files", [])
+    return files[0]["id"] if files else None
 
-  const fTitle = document.getElementById('f-title');
-  const fDesc = document.getElementById('f-desc');
-  const fRetail = document.getElementById('f-retail');
-  const fRuf = document.getElementById('f-ruf');
+def _gdrive_create_folder(token: str, name: str) -> str:
+    meta = {"name": name, "mimeType": "application/vnd.google-apps.folder"}
+    r = requests.post(
+        "https://www.googleapis.com/drive/v3/files",
+        headers={**_gdrive_headers(token), "Content-Type": "application/json"},
+        json=meta,
+        timeout=30,
+    )
+    r.raise_for_status()
+    return r.json()["id"]
 
-  const btnPhoto = document.getElementById('btn-photo');
-  const btnDeletePhoto = document.getElementById('btn-delete-photo');
-  const btnSave = document.getElementById('btn-save');
-  const btnDescribe = document.getElementById('btn-describe');
-  const btnPriceToggle = document.getElementById('btn-price-toggle');
-  const btnToggleRetail = document.getElementById('btn-toggle-retail');
+def _gdrive_get_folder_id(token: str) -> str:
+    if _gdrive_cache["folder_id"]:
+        return _gdrive_cache["folder_id"]
+    fid = _gdrive_find_folder(token, GDRIVE_FOLDER_NAME)
+    if not fid:
+        fid = _gdrive_create_folder(token, GDRIVE_FOLDER_NAME)
+    _gdrive_cache["folder_id"] = fid
+    return fid
 
-  const retailWrap = document.getElementById('retail-wrap');
-  const rufWrap = document.getElementById('ruf-wrap');
+def _gdrive_find_file_in_folder(token: str, folder_id: str, filename: str) -> Optional[str]:
+    # cache
+    if filename in _gdrive_cache["name_to_id"]:
+        return _gdrive_cache["name_to_id"][filename]
+    q = f"'{folder_id}' in parents and name='{filename}' and trashed=false"
+    r = requests.get(
+        "https://www.googleapis.com/drive/v3/files",
+        headers=_gdrive_headers(token),
+        params={"q": q, "fields": "files(id,name)"},
+        timeout=30,
+    )
+    r.raise_for_status()
+    files = r.json().get("files", [])
+    if not files:
+        return None
+    fid = files[0]["id"]
+    _gdrive_cache["name_to_id"][filename] = fid
+    return fid
 
-  const statusText = document.getElementById('status-text');
-  const statusPill = document.getElementById('status-pill');
-  const statusPillText = document.getElementById('status-pill-text');
+def _gdrive_upload_bytes(token: str, folder_id: str, filename: str, data: bytes, mimetype: str) -> str:
+    import uuid
+    boundary = "===============" + uuid.uuid4().hex
+    metadata = {"name": filename, "parents": [folder_id]}
+    body = (
+        f"--{boundary}\r\n"
+        "Content-Type: application/json; charset=UTF-8\r\n\r\n"
+        + json.dumps(metadata)
+        + "\r\n"
+        f"--{boundary}\r\n"
+        f"Content-Type: {mimetype}\r\n\r\n"
+    ).encode("utf-8") + data + f"\r\n--{boundary}--\r\n".encode("utf-8")
 
-  const logEl = document.getElementById('log');
-  const toastWrap = document.getElementById('toast-wrap');
+    existing_id = _gdrive_find_file_in_folder(token, folder_id, filename)
+    if existing_id:
+        url = f"https://www.googleapis.com/upload/drive/v3/files/{existing_id}"
+        r = requests.patch(
+            url,
+            headers={**_gdrive_headers(token), "Content-Type": f"multipart/related; boundary={boundary}"},
+            params={"uploadType": "multipart"},
+            data=body,
+            timeout=60,
+        )
+        r.raise_for_status()
+        fid = r.json()["id"]
+    else:
+        url = "https://www.googleapis.com/upload/drive/v3/files"
+        r = requests.post(
+            url,
+            headers={**_gdrive_headers(token), "Content-Type": f"multipart/related; boundary={boundary}"},
+            params={"uploadType": "multipart"},
+            data=body,
+            timeout=60,
+        )
+        r.raise_for_status()
+        fid = r.json()["id"]
+    _gdrive_cache["name_to_id"][filename] = fid
+    return fid
 
-  let selectedImageUrl = "";
-  let selectedFilename = "";
+def _gdrive_cleanup_old(token: str, folder_id: str) -> None:
+    # run max 1x per day
+    today = time.strftime("%Y-%m-%d")
+    if _gdrive_cache["last_cleanup"] == today:
+        return
+    cutoff_ts = time.time() - (GDRIVE_RETENTION_DAYS * 86400)
+    cutoff_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(cutoff_ts))
+    q = f"'{folder_id}' in parents and modifiedTime < '{cutoff_iso}' and trashed=false"
+    page_token = None
+    while True:
+        params = {"q": q, "fields": "nextPageToken,files(id,name,modifiedTime)", "pageSize": 1000}
+        if page_token:
+            params["pageToken"] = page_token
+        r = requests.get("https://www.googleapis.com/drive/v3/files", headers=_gdrive_headers(token), params=params, timeout=60)
+        r.raise_for_status()
+        js = r.json()
+        files = js.get("files", [])
+        for f in files:
+            try:
+                requests.delete(f"https://www.googleapis.com/drive/v3/files/{f['id']}", headers=_gdrive_headers(token), timeout=30).raise_for_status()
+            except Exception:
+                pass
+        page_token = js.get("nextPageToken")
+        if not page_token:
+            break
+    _gdrive_cache["last_cleanup"] = today
 
-  // ⚙️ Settings
-  const SETTINGS_KEY = "MYAUKTION_SETTINGS_V1";
-  const btnSettings = document.getElementById('btn-settings');
-  const settingsPanel = document.getElementById('settings-panel');
-  const settingsMini = document.getElementById('settings-mini');
+def _gdrive_backup_article(artikelnr: str) -> None:
+    if not _gdrive_enabled():
+        return
+    try:
+        token = _gdrive_access_token()
+        folder_id = _gdrive_get_folder_id(token)
+        # cleanup old (daily)
+        _gdrive_cleanup_old(token, folder_id)
 
-  const sEinl = document.getElementById('s-einlieferer-id');
-  const sMit  = document.getElementById('s-mitarbeiter');
-  const sLagerstand = document.getElementById('s-lagerstand');
-  const sUebernehmen = document.getElementById('s-uebernehmen');
-  const sAngeliefert = document.getElementById('s-angeliefert');
-  const sBetriebsmittel = document.getElementById('s-betriebsmittel');
-  const sSortiment = document.getElementById('s-sortiment');
-  const btnSettingsSave = document.getElementById('btn-settings-save');
+        # Upload/Update daily CSV
+        day = time.strftime("%Y-%m-%d")
+        daily_name = f"artikel_export_{day}.csv"
+        # ensure current CSV exists
+        _ensure_export_csv_exists()
+        csv_bytes = EXPORT_CSV.read_bytes()
+        _gdrive_upload_bytes(token, folder_id, daily_name, csv_bytes, "text/csv")
 
-  function loadSettings(){
-    try{
-      const raw = localStorage.getItem(SETTINGS_KEY);
-      const d = raw ? JSON.parse(raw) : {};
-      return Object.assign({
-        einlieferer_id: "22",
-        mitarbeiter: "Jan",
-        menge: 1,
-        lagerstand: 1,
-        uebernehmen: 1,
-        angeliefert: "",
-        betriebsmittel: "",
-        price_system_enabled: true
-        ,hide_listprice: false,
-        sortiment: ""
-      }, d || {});
-    }catch(e){
-      return {einlieferer_id:"22",mitarbeiter:"Jan",menge:1,lagerstand:1,uebernehmen:1,angeliefert:"",betriebsmittel:"",price_system_enabled:true};
-    }
-  }
-  function saveSettings(s){ try{ localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); }catch(e){} }
+        # Upload images for article (processed preferred, else raw)
+        pics = sorted(PROCESSED_DIR.glob(f"{artikelnr}_*.jpg"))
+        if not pics:
+            pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
+        for p in pics:
+            # determine index from suffix _N
+            m = re.search(r"_(\d+)\.jpg$", p.name)
+            idx = m.group(1) if m else "1"
+            gname = f"{artikelnr}_{idx}.jpg"
+            _gdrive_upload_bytes(token, folder_id, gname, p.read_bytes(), "image/jpeg")
+    except Exception:
+        # Backup darf nie das Speichern blockieren
+        return
 
-  function settingsText(s){
-    const parts=[];
-    parts.push("Einl.: " + (s.einlieferer_id||"-"));
-    parts.push("MA: " + (s.mitarbeiter||"-"));
-    parts.push("Menge: " + (s.menge ?? 1));
-    parts.push("LS: " + (s.lagerstand ?? 1));
-    parts.push("ü: " + (s.uebernehmen ?? 1));
-    if(s.angeliefert) parts.push("angel.: " + s.angeliefert);
-    if(s.betriebsmittel) parts.push("BM: " + s.betriebsmittel);
-    if(s.sortiment) parts.push("Sort: " + s.sortiment);
-    parts.push((s.price_system_enabled===false) ? "Preis: AUS" : "Preis: AN");
-    return parts.join(" · ");
-  }
+# ----------------------------
+# Admin Auth
+# ----------------------------
+def _is_admin(request: Request) -> bool:
+    if not ADMIN_TOKEN:
+        return True
+    token = (request.headers.get("X-Admin-Token", "") or "").strip()
+    if not token:
+        token = (request.query_params.get("token", "") or "").strip()
+    return token == ADMIN_TOKEN
 
-  function applySettingsToUI(){
-    const s = loadSettings();
-    sEinl.value = s.einlieferer_id || "22";
-    sMit.value = s.mitarbeiter || "Jan";
-    sLagerstand.value = String(s.lagerstand ?? 1);
-    sUebernehmen.value = String(s.uebernehmen ?? 1);
-    sAngeliefert.value = s.angeliefert || "";
-    sBetriebsmittel.value = s.betriebsmittel || "";
-    if(sSortiment) sSortiment.value = s.sortiment || "";
-    settingsMini.textContent = "Einstellungen: " + settingsText(s);
-    // Main-Feld Menge übernehmen
-    try{ fMenge.value = String(s.menge ?? 1); }catch(e){}
-  }
 
-  function readSettingsFromUI(){
-    const prev = loadSettings();
+def _admin_guard(request: Request) -> Optional[JSONResponse]:
+    if _is_admin(request):
+        return None
+    return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
+
+
+# ----------------------------
+# Meta JSON
+# ----------------------------
+def _default_meta(artikelnr: str) -> Dict[str, Any]:
     return {
-      einlieferer_id: (sEinl.value||"").trim(),
-      mitarbeiter: (sMit.value||"").trim(),
-      menge: parseInt((fMenge?.value)||"1",10) || 1,
-      lagerstand: parseInt(sLagerstand.value||"1",10) || 1,
-      uebernehmen: parseInt(sUebernehmen.value||"1",10) || 1,
-      angeliefert: (sAngeliefert.value||"").trim(),
-      betriebsmittel: (sBetriebsmittel.value||"").trim(),
-      sortiment: (sSortiment ? (sSortiment.value||"").trim() : (prev.sortiment||"")),
-      price_system_enabled: (prev.price_system_enabled !== false)
-    };
-  }
-
-  function toggleSettings(){
-    const open = settingsPanel.classList.contains('hidden');
-    if(open){ settingsPanel.classList.remove('hidden'); btnSettings.textContent='⬆️ Einstellungen'; }
-    else { settingsPanel.classList.add('hidden'); btnSettings.textContent='⚙️ Einstellungen'; }
-  }
-
-  function applyPriceMode(){
-    const s = loadSettings();
-    const enabled = (s.price_system_enabled !== false);
-    const hideRetail = (s.hide_listprice === true);
-
-    if(btnPriceToggle){
-      btnPriceToggle.textContent = enabled ? "Preis-System ausschalten" : "Preis-System einschalten";
-      btnPriceToggle.classList.toggle('btn-danger', !enabled);
-      btnPriceToggle.classList.toggle('btn-ghost', enabled);
-    }
-    if(btnToggleRetail){
-      // Button nur sinnvoll, wenn Preis-System AN ist
-      btnToggleRetail.classList.toggle("hidden", !enabled);
-      btnToggleRetail.textContent = hideRetail ? "Listenpreis einblenden" : "Listenpreis ausblenden";
-      // rot, wenn Listenpreis gerade AUSGEBLENDET ist
-      btnToggleRetail.classList.toggle('btn-danger', enabled && hideRetail);
-      btnToggleRetail.classList.toggle('btn-ghost', !(enabled && hideRetail));
+        "artikelnr": str(artikelnr),
+        "titel": "",
+        "beschreibung": "",
+        "kategorie": "",
+        "retail_price": 0.0,
+        "rufpreis": 0.0,
+        "lagerort": "",
+        "einlieferer": "",
+        "mitarbeiter": "",
+        "lagerstand": 1,
+        "sortiment": "",
+        "reviewed": False,
+        "ki_source": "",          # pending | realtime | failed | ""
+        "ki_last_error": "",
+        "ki_runtime_ms": 0,
+        "batch_done": False,
+        "last_image": "",
+        "cover": "",
+        "created_at": int(time.time()),
+        "updated_at": int(time.time()),
     }
 
-    const retailVisible = (enabled && !hideRetail);
 
-    if(retailWrap){
-      retailWrap.classList.toggle("hidden", !retailVisible);
+def _meta_path(artikelnr: str) -> Path:
+    return RAW_DIR / f"{artikelnr}.json"
+
+
+def _load_meta_json(artikelnr: str) -> Dict[str, Any]:
+    p = _meta_path(artikelnr)
+    data: Dict[str, Any] = {}
+    if p.exists():
+        try:
+            data = json.loads(p.read_text("utf-8"))
+        except Exception:
+            data = {}
+    merged = _default_meta(artikelnr)
+    merged.update(data)
+    return merged
+
+
+def _save_meta_json(artikelnr: str, data: Dict[str, Any]) -> None:
+    data["updated_at"] = int(time.time())
+    _meta_path(artikelnr).write_text(json.dumps(data, ensure_ascii=False, indent=2), "utf-8")
+
+
+# ----------------------------
+# KI Usage (Budget Anzeige – Schätzung)
+# ----------------------------
+def _load_usage() -> Dict[str, Any]:
+    if USAGE_JSON.exists():
+        try:
+            u = json.loads(USAGE_JSON.read_text("utf-8"))
+        except Exception:
+            u = {}
+    else:
+        u = {}
+    u.setdefault("budget_eur", DEFAULT_BUDGET_EUR)
+    u.setdefault("cost_per_success_call_eur", COST_PER_SUCCESS_CALL_EUR)
+    u.setdefault("success_calls", 0)
+    u.setdefault("failed_calls", 0)
+    u.setdefault("last_error", "")
+    u.setdefault("last_success_at", 0)
+    u.setdefault("spent_est_eur", 0.0)
+    return u
+
+
+def _save_usage(u: Dict[str, Any]) -> None:
+    USAGE_JSON.write_text(json.dumps(u, ensure_ascii=False, indent=2), "utf-8")
+
+
+def _usage_success() -> None:
+    u = _load_usage()
+    u["success_calls"] = int(u.get("success_calls", 0)) + 1
+    u["spent_est_eur"] = round(float(u.get("success_calls", 0)) * float(u.get("cost_per_success_call_eur", COST_PER_SUCCESS_CALL_EUR)), 4)
+    u["last_success_at"] = int(time.time())
+    u["last_error"] = ""
+    _save_usage(u)
+
+
+def _usage_fail(err: str) -> None:
+    u = _load_usage()
+    u["failed_calls"] = int(u.get("failed_calls", 0)) + 1
+    u["last_error"] = (err or "")[:250]
+    _save_usage(u)
+
+
+# ----------------------------
+# CSV Export (Rebuild nutzt dieselben CSV_FIELDS wie Live-Update)
+# ----------------------------
+def _rebuild_csv_export() -> None:
+    """Rebuild komplette artikel_export.csv aus allen *.json Metadaten.
+
+    - Trennzeichen: ;
+    - Encoding: UTF-8 mit BOM (utf-8-sig) damit Excel sauber spaltet
+    - Sortiment/Kategorie werden NICHT exportiert
+    - Mitarbeiter ist letzte Spalte
+    """
+    rows: list[dict] = []
+    for meta_file in RAW_DIR.glob("*.json"):
+        try:
+            d = json.loads(meta_file.read_text("utf-8"))
+        except Exception:
+            continue
+
+        nr = str(d.get("artikelnr") or meta_file.stem)
+        rows.append({
+            "ArtikelNr": nr,
+            "Bezeichnung": str(d.get("titel", "") or ""),
+            "Beschreibung": str(d.get("beschreibung", "") or ""),
+            "Menge": int(d.get("menge", 1) or 1),
+            "Preis": _format_rufpreis(d.get("rufpreis", 0.0) or 0.0),
+            "Ladenpreis": _format_ladenpreis(d.get("retail_price", 0) or 0),
+            "Lagerort": str(d.get("lagerort", "") or ""),
+            "Lagerstand": int(d.get("lagerstand", 1) or 1),
+            "Uebernehmen": int(d.get("uebernehmen", 1) or 1),
+            "Sortiment": str(d.get("sortiment", "") or ""),
+            "Einlieferer-ID": str(d.get("einlieferer_id", d.get("einlieferer", "")) or ""),
+            "Angeliefert": str(d.get("angeliefert", "") or ""),
+            "Betriebsmittel": str(d.get("betriebsmittel", "") or ""),
+            "Mitarbeiter": str(d.get("mitarbeiter", "") or ""),
+        })
+
+    def _sort_key(r: dict):
+        try:
+            return int(r.get("ArtikelNr", 0))
+        except Exception:
+            return str(r.get("ArtikelNr", ""))
+
+    rows.sort(key=_sort_key)
+
+    with EXPORT_CSV.open("w", newline="", encoding="utf-8-sig") as f:
+        w = csv.DictWriter(f, fieldnames=CSV_FIELDS, delimiter=";")
+        w.writeheader()
+        for r in rows:
+            w.writerow({k: r.get(k, "") for k in CSV_FIELDS})
+
+    print("[CSV] Export aktualisiert:", EXPORT_CSV)
+
+
+# ----------------------------
+# KI (1 Versuch, kein Fallback, mit Kontext fürs 2. Foto)
+# ----------------------------
+def _run_meta_once(artikelnr: str, img_path: Path) -> Tuple[Optional[Dict[str, Any]], bool, str, int]:
+    """Return (meta, ok, error, runtime_ms)"""
+    try:
+        import ki_engine_openai as ki_engine
+    except Exception as e:
+        err = f"import_error: {e}"
+        print("[KI] Importfehler:", e)
+        return None, False, err, 0
+
+    current = _load_meta_json(artikelnr)
+
+    start = time.time()
+    try:
+        meta = ki_engine.generate_meta(str(img_path), str(artikelnr), context=current)
+        runtime_ms = int((time.time() - start) * 1000)
+
+        if not meta:
+            return None, False, "ki_failed", runtime_ms
+
+        title = (meta.get("title") or "").strip()
+        desc = (meta.get("description") or "").strip()
+        cat = (meta.get("category") or "").strip()
+
+        try:
+            retail = float(meta.get("retail_price", 0) or 0)
+        except Exception:
+            retail = 0.0
+
+        # OK nur wenn Titel + (Beschreibung ODER Preis)
+        if not title or (not desc and retail <= 0):
+            return None, False, "invalid_ki_result", runtime_ms
+
+        meta["title"] = title
+        meta["description"] = desc
+        meta["category"] = cat
+        meta["retail_price"] = retail
+        return meta, True, "", runtime_ms
+
+    except Exception as e:
+        runtime_ms = int((time.time() - start) * 1000)
+        err = str(e)
+        print("[KI] Fehler:", e)
+        return None, False, err, runtime_ms
+
+
+def _apply_ki_to_meta(mj: Dict[str, Any], meta: Dict[str, Any]) -> None:
+    mj["titel"] = _normalize_title(meta.get("title", "")).strip()
+    mj["beschreibung"] = meta.get("description", "").strip()
+    mj["kategorie"] = meta.get("category", "").strip()
+
+    retail_f = float(meta.get("retail_price", 0.0) or 0.0)
+    mj["retail_price"] = round(retail_f, 2)
+
+    # Rufpreis: 20% auf ganze € aufrunden
+    mj["rufpreis"] = float(math.ceil(retail_f * 0.20)) if retail_f > 0 else 0.0
+
+
+def _run_meta_background(artikelnr: str, img_path: Path) -> None:
+    print(f"[BG-KI] Starte Hintergrund-KI für Artikel {artikelnr}")
+    meta, ok, err, runtime_ms = _run_meta_once(artikelnr, img_path)
+
+    mj = _load_meta_json(artikelnr)
+    mj["ki_runtime_ms"] = runtime_ms
+    mj["last_image"] = img_path.name
+    mj["batch_done"] = True
+
+    if ok and meta:
+        _apply_ki_to_meta(mj, meta)
+        mj["ki_source"] = "realtime"
+        mj["ki_last_error"] = ""
+        mj["reviewed"] = False
+        _save_meta_json(artikelnr, mj)
+        _usage_success()
+    else:
+        mj["ki_source"] = "failed"
+        mj["ki_last_error"] = err or "ki_failed"
+        _save_meta_json(artikelnr, mj)
+        _usage_fail(mj["ki_last_error"])
+
+    _rebuild_csv_export()
+    print(f"[BG-KI] Fertig für Artikel {artikelnr} – ki_ok={ok}")
+
+
+
+
+# ----------------------------
+# Sortimente (persistent, Admin verwaltbar)
+# ----------------------------
+SORTIMENTE_JSON = EXPORT_DIR / "sortimente.json"
+
+def _default_sortimente() -> list[str]:
+    # Beispiele (kannst du im Admin ändern)
+    return ["(22) Tiernahrung 45"]
+
+def _load_sortimente() -> list[str]:
+    if SORTIMENTE_JSON.exists():
+        try:
+            data = json.loads(SORTIMENTE_JSON.read_text("utf-8"))
+            if isinstance(data, list):
+                return [str(x).strip() for x in data if str(x).strip()]
+        except Exception:
+            pass
+    return _default_sortimente()
+
+def _save_sortimente(items: list[str]) -> None:
+    cleaned = []
+    for x in items:
+        s = str(x).strip()
+        if not s:
+            continue
+        if s not in cleaned:
+            cleaned.append(s)
+    SORTIMENTE_JSON.write_text(json.dumps(cleaned, ensure_ascii=False, indent=2), "utf-8")
+
+
+# ----------------------------
+# Artikel-Liste (Gesamtartikel – nach Datum sortiert)
+# ----------------------------
+def _list_articles() -> list[dict]:
+    items = []
+    for p in RAW_DIR.glob("*.json"):
+        try:
+            mj = json.loads(p.read_text("utf-8"))
+        except Exception:
+            continue
+        nr = str(mj.get("artikelnr", p.stem))
+        created = int(mj.get("created_at", 0) or 0)
+        updated = int(mj.get("updated_at", 0) or 0)
+
+        pics = sorted(RAW_DIR.glob(f"{nr}_*.jpg"))
+        img_url = ""
+        if pics:
+            rel = pics[-1].relative_to(BASE_DIR)
+            img_url = "/static/" + str(rel).replace("\\", "/")
+
+        items.append({
+            "artikelnr": nr,
+            "titel": mj.get("titel", "") or "",
+            "beschreibung": mj.get("beschreibung", "") or "",
+            "sortiment": (mj.get("sortiment", "") or "").strip(),
+            "lagerort": mj.get("lagerort", "") or "",
+            "menge": int(mj.get("menge", 1) or 1),
+            "rufpreis": mj.get("rufpreis", 0.0) or 0.0,
+            "retail_price": mj.get("retail_price", 0.0) or 0.0,
+            "mitarbeiter": mj.get("mitarbeiter", "") or "",
+            "angeliefert": mj.get("angeliefert", "") or "",
+            "created_at": created,
+            "updated_at": updated,
+            "image": img_url,
+        })
+    # neueste zuerst
+    items.sort(key=lambda x: int(x.get("created_at", 0) or 0), reverse=True)
+    return items
+
+# ----------------------------
+# Routes
+# ----------------------------
+@app.get("/")
+def root():
+    return FileResponse(str(BASE_DIR / "index.html"))
+
+
+@app.get("/admin")
+def admin_root():
+    return FileResponse(str(BASE_DIR / "admin.html"))
+
+
+@app.get("/articles")
+def articles_page():
+    return FileResponse(str(BASE_DIR / "articles.html"))
+
+
+@app.get("/api/health")
+def health():
+    return {"ok": True}
+
+
+@app.get("/api/sortimente")
+def sortimente_public():
+    return {"ok": True, "items": _load_sortimente()}
+
+
+@app.get("/api/articles")
+def articles_api(date_from: str | None = None, date_to: str | None = None):
+    """
+    Gesamtartikel (neueste zuerst).
+    Optional:
+      /api/articles?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD
+    """
+    items = _list_articles()
+
+    def _to_ts(s: str, end: bool = False) -> int:
+        try:
+            dt = datetime.datetime.strptime(s, "%Y-%m-%d")
+            if end:
+                dt = dt + datetime.timedelta(days=1) - datetime.timedelta(seconds=1)
+            return int(dt.replace(tzinfo=datetime.timezone.utc).timestamp())
+        except Exception:
+            return 0
+
+    if date_from:
+        tsf = _to_ts(date_from, end=False)
+        if tsf:
+            items = [x for x in items if int(x.get("created_at", 0) or 0) >= tsf]
+    if date_to:
+        tst = _to_ts(date_to, end=True)
+        if tst:
+            items = [x for x in items if int(x.get("created_at", 0) or 0) <= tst]
+
+    return {"ok": True, "items": items}
+
+
+@app.get("/api/export.csv")
+def export_csv(from_nr: str | None = None, to_nr: str | None = None):
+    """
+    Export CSV (UTF-8 mit BOM für Excel). Optionaler Bereich:
+      /api/export.csv?from_nr=123458&to_nr=123480
+    """
+    _ensure_export_csv_exists()
+
+    # Kein Filter -> Datei direkt ausliefern
+    if not from_nr and not to_nr:
+        return FileResponse(str(EXPORT_CSV), filename="artikel_export.csv", media_type="text/csv")
+
+    # Filter -> in-memory CSV erzeugen
+    def _in_range(n: str) -> bool:
+        try:
+            ni = int(n)
+        except Exception:
+            return False
+        if from_nr:
+            try:
+                if ni < int(from_nr): return False
+            except Exception:
+                pass
+        if to_nr:
+            try:
+                if ni > int(to_nr): return False
+            except Exception:
+                pass
+        return True
+
+    import io, csv
+    rows = []
+    for jf in sorted(RAW_DIR.glob("*.json")):
+        art = jf.stem
+        if not _in_range(art):
+            continue
+        meta = _load_meta_json(art)
+        rows.append([
+            art,
+            str(int(meta.get("menge") or 1)),
+            str(meta.get("titel") or ""),
+            str(meta.get("beschreibung") or ""),
+            _format_rufpreis(meta.get("rufpreis", 0)),
+            str(meta.get("lagerort") or ""),
+            str(int(meta.get("lagerstand") or 1)),
+            str(int(meta.get("uebernehmen") or 1)),
+            str(meta.get("einlieferer_id") or meta.get("einlieferer") or ""),
+            str(meta.get("angeliefert") or ""),
+            str(meta.get("betriebsmittel") or ""),
+            str(meta.get("mitarbeiter") or ""),
+        ])
+
+    bio = io.StringIO()
+    w = csv.writer(bio, delimiter=";", quotechar='"', quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
+    w.writerow(CSV_HEADERS)
+    for r in rows:
+        w.writerow(r)
+    content = ("\ufeff" + bio.getvalue()).encode("utf-8")
+    return Response(content, media_type="text/csv", headers={"Content-Disposition":"attachment; filename=artikel_export.csv"})
+
+
+@app.get("/api/next_artikelnr")
+def next_artikelnr():
+    max_nr = 0
+    for p in RAW_DIR.glob("*.json"):
+        try:
+            d = json.loads(p.read_text("utf-8"))
+            nr = int(d.get("artikelnr", 0))
+            max_nr = max(max_nr, nr)
+        except Exception:
+            pass
+    return {"ok": True, "next": max_nr + 1 if max_nr else 1}
+
+
+@app.get("/api/check_artnr")
+def check_artnr(artikelnr: str):
+    artikelnr = str(artikelnr).strip()
+    exists = _meta_path(artikelnr).exists() or any(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
+    return {"ok": True, "exists": bool(exists)}
+
+
+@app.post("/api/upload")
+async def upload(
+    file: UploadFile = File(...),
+    artikelnr: str = Form(...),
+    background_tasks: BackgroundTasks = None,
+):
+    artikelnr = str(artikelnr).strip()
+    data = await file.read()
+
+    try:
+        img = Image.open(io.BytesIO(data))
+        img = ImageOps.exif_transpose(img)
+        img = img.convert("RGB")
+
+        # SPEED: kleiner + schneller für Base64/Upload
+        img.thumbnail((1024, 1024))
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"Ungültiges Bild: {e}"}, status_code=400)
+
+    existing = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
+    idx = int(existing[-1].stem.split("_")[-1]) + 1 if existing else 0
+    out = RAW_DIR / f"{artikelnr}_{idx}.jpg"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    img.save(out, "JPEG", quality=78)
+
+    # set pending, damit Polling NICHT bei altem realtime sofort stoppt
+    mj = _load_meta_json(artikelnr)
+    mj["last_image"] = out.name
+    mj["ki_source"] = "pending"
+    mj["ki_last_error"] = ""
+    mj["batch_done"] = False
+    _save_meta_json(artikelnr, mj)
+
+    _rebuild_csv_export()
+
+    if background_tasks:
+        background_tasks.add_task(_run_meta_background, artikelnr, out)
+
+    return {"ok": True, "filename": out.name}
+
+
+@app.get("/api/images")
+def images(artikelnr: str):
+    artikelnr = str(artikelnr).strip()
+    meta = _load_meta_json(artikelnr)
+    cover = str(meta.get("cover") or "").strip()
+
+    files = []
+    for f in sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg")):
+        rel = f.relative_to(BASE_DIR)
+        files.append("/static/" + str(rel).replace("\\", "/"))
+
+    # cover-first ordering
+    if cover:
+        files.sort(key=lambda u: 0 if u.endswith("/" + cover) or u.endswith(cover) else 1)
+
+    return {"ok": True, "files": files, "cover": cover}
+
+@app.post("/api/set_cover")
+def set_cover(payload: Dict[str, Any]):
+    artikelnr = str(payload.get("artikelnr", "")).strip()
+    filename = str(payload.get("filename", "") or payload.get("file", "") or payload.get("url", "")).strip()
+    if "/" in filename:
+        filename = filename.split("/")[-1]
+    if "?" in filename:
+        filename = filename.split("?")[0]
+
+    if not artikelnr or not filename:
+        return JSONResponse({"ok": False, "error": "missing data"}, status_code=400)
+
+    p = RAW_DIR / filename
+    if not p.exists():
+        return JSONResponse({"ok": False, "error": "file not found"}, status_code=404)
+
+    meta = _load_meta_json(artikelnr)
+    meta["cover"] = filename
+    _save_meta_json(artikelnr, meta)
+    return {"ok": True, "cover": filename}
+
+
+
+
+
+@app.post("/api/delete_last_image")
+def delete_last_image(data: Dict[str, Any]):
+    artikelnr = str(data.get("artikelnr", "")).strip()
+    if not artikelnr:
+        return JSONResponse({"ok": False, "error": "Artikelnummer fehlt"}, status_code=400)
+
+    files = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
+    if not files:
+        return JSONResponse({"ok": False, "error": "Keine Bilder vorhanden"}, status_code=404)
+
+    target = files[-1]
+    try:
+        target.unlink()
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"Konnte Bild nicht löschen: {e}"}, status_code=500)
+
+    # auch ggf. bearbeitete Version löschen (best-effort)
+    try:
+        stem = target.stem
+        for pf in PROCESSED_DIR.glob(stem + ".*"):
+            try: pf.unlink()
+            except Exception: pass
+    except Exception:
+        pass
+
+    # meta last_image aktualisieren
+    mj = _load_meta_json(artikelnr)
+    mj["last_image"] = files[-2].name if len(files) >= 2 else ""
+    _save_meta_json(artikelnr, mj)
+
+    return {"ok": True, "deleted": target.name}
+
+
+@app.post("/api/delete_image")
+def delete_image(payload: Dict[str, Any]):
+    artikelnr = str(payload.get("artikelnr", "")).strip()
+    filename = str(payload.get("filename", "") or payload.get("name","") or payload.get("file","") or payload.get("url","")).strip()
+
+    # falls URL: nur basename nehmen
+    if "/" in filename:
+        filename = filename.split("/")[-1]
+    if "?" in filename:
+        filename = filename.split("?", 1)[0]
+
+    if not artikelnr or not filename:
+        return JSONResponse({"ok": False, "error": "artikelnr/filename fehlt"}, status_code=400)
+
+    # Sicherheitscheck: nur Dateien dieses Artikels erlauben
+    if not filename.startswith(f"{artikelnr}_") or not filename.lower().endswith(".jpg"):
+        return JSONResponse({"ok": False, "error": "ungültiger Dateiname"}, status_code=400)
+
+    path = RAW_DIR / filename
+    if not path.exists():
+        return JSONResponse({"ok": False, "error": "Datei nicht gefunden"}, status_code=404)
+
+    # RAW löschen
+    try:
+        path.unlink()
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"löschen fehlgeschlagen: {e}"}, status_code=500)
+
+    # ggf. bearbeitete Version löschen (best-effort)
+    try:
+        stem = path.stem
+        for pf in PROCESSED_DIR.glob(stem + ".*"):
+            try:
+                pf.unlink()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # meta updaten: last_image + cover korrekt setzen
+    mj = _load_meta_json(artikelnr)
+    pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
+
+    mj["last_image"] = pics[-1].name if pics else ""
+
+    # wenn gelöschtes Bild Titelbild war -> neues Titelbild setzen (erstes verbleibendes, sonst leer)
+    if str(mj.get("cover", "")).strip() == filename:
+        mj["cover"] = pics[0].name if pics else ""
+
+    _save_meta_json(artikelnr, mj)
+
+    _rebuild_csv_export()
+    return {"ok": True, "deleted": filename}
+
+
+
+@app.get("/api/meta")
+def meta(artikelnr: str):
+    artikelnr = str(artikelnr).strip()
+    mj = _load_meta_json(artikelnr)
+
+    pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
+    img_url = ""
+    if pics:
+        rel = pics[-1].relative_to(BASE_DIR)
+        img_url = "/static/" + str(rel).replace("\\", "/")
+
+    return {
+        "ok": True,
+        "artikelnr": artikelnr,
+        "titel": mj.get("titel", "") or "",
+        "beschreibung": mj.get("beschreibung", "") or "",
+        "kategorie": mj.get("kategorie", "") or "",
+        "retail_price": mj.get("retail_price", 0.0) or 0.0,
+        "rufpreis": mj.get("rufpreis", 0.0) or 0.0,
+        "lagerort": mj.get("lagerort", "") or "",
+        "sortiment": mj.get("sortiment", "") or "",
+        "einlieferer": mj.get("einlieferer", "") or "",
+        "mitarbeiter": mj.get("mitarbeiter", "") or "",
+        "reviewed": bool(mj.get("reviewed", False)),
+        "ki_source": mj.get("ki_source", "") or "",
+        "ki_last_error": mj.get("ki_last_error", "") or "",
+        "last_image": mj.get("last_image", "") or "",
+        "image": img_url,
     }
-    if(rufWrap){
-      rufWrap.classList.toggle("sm:col-span-2", !retailVisible);
-    }
 
-    if(!retailVisible){
-      fRetail.value = "";
-      fRetail.classList.add("price-off");
-    }else{
-      fRetail.classList.remove("price-off");
-    }
 
-    if(!enabled){
-      fRuf.value = "1";
-      fRuf.classList.add("price-off");
-    }else{
-      fRuf.classList.remove("price-off");
-    }
-  }
+@app.post("/api/save")
+def save(data: Dict[str, Any]):
+    artikelnr = str(data.get("artikelnr", "")).strip()
+    if not artikelnr:
+        return JSONResponse({"ok": False, "error": "Artikelnummer fehlt"}, status_code=400)
 
-  function log(msg){
-    const t = new Date().toLocaleTimeString();
-    const d = document.createElement('div');
-    d.textContent = `[${t}] ${msg}`;
-    logEl.prepend(d);
-  }
-  function toast(msg){
-    const el = document.createElement('div');
-    el.className = 'toast';
-    el.textContent = msg;
-    toastWrap.appendChild(el);
-    void el.offsetWidth;
-    el.classList.add('show');
-    setTimeout(()=>{ el.classList.remove('show'); setTimeout(()=>el.remove(),200); }, 1500);
-  }
-  function validArtNr(){
-    const v = (fArt.value||"").trim();
-    return /^\d{6,}$/.test(v);
-  }
-  function setPill(on, text){
-    if(on){ statusPill.classList.remove('hidden'); statusPillText.textContent = text || "…"; }
-    else { statusPill.classList.add('hidden'); }
-  }
+    mj = _load_meta_json(artikelnr)
 
-  async function refreshImages(){
-    const art = (fArt.value||"").trim();
-    if(!art) return;
-    const res = await fetch('/api/images?artikelnr=' + encodeURIComponent(art));
-    const j = await res.json();
+    # Textfelder
+    for k in ["titel", "beschreibung", "lagerort", "einlieferer", "mitarbeiter", "kategorie", "sortiment"]:
+        if k in data and data[k] is not None:
+            mj[k] = str(data[k])
 
-    imgStrip.innerHTML = '';
-    selectedImageUrl = "";
-    selectedFilename = "";
+    # Settings-Felder (für CSV Export)
+    if "menge" in data: mj["menge"] = int(data.get("menge") or 1)
+    if "lagerstand" in data: mj["lagerstand"] = int(data.get("lagerstand") or 1)
+    if "uebernehmen" in data: mj["uebernehmen"] = int(data.get("uebernehmen") or 1)
+    if "einlieferer_id" in data: mj["einlieferer_id"] = str(data.get("einlieferer_id") or "")
+    if "angeliefert" in data: mj["angeliefert"] = str(data.get("angeliefert") or "")
+    if "betriebsmittel" in data: mj["betriebsmittel"] = str(data.get("betriebsmittel") or "")
+    if "mitarbeiter" in data: mj["mitarbeiter"] = str(data.get("mitarbeiter") or "")
 
-    const files = (j.files||[]);
-    const cover = (j.cover||"").trim();
-    window.__MYAUKTION_COVER = cover;
+    # Preise (falls manuell angepasst)
+    if "retail_price" in data:
+        try: mj["retail_price"] = float(data.get("retail_price") or 0)
+        except Exception: mj["retail_price"] = 0.0
+    if "rufpreis" in data:
+        try: mj["rufpreis"] = float(data.get("rufpreis") or 0)
+        except Exception: mj["rufpreis"] = 0.0
 
-    files.forEach((url, idx)=>{
-      const img = document.createElement('img');
-      img.src = url;
+    if "reviewed" in data:
+        mj["reviewed"] = bool(data.get("reviewed", False))
 
-      // filename aus URL
-      const fname = String(url).split('/').pop().split('?')[0];
+    _save_meta_json(artikelnr, mj)
 
-      // cover markieren (erster in Liste ist ohnehin cover-first, aber zur Sicherheit)
-      const isCover = (fname === cover) || (idx===0 && !cover && files.length);
+    # Schnell: nur diese eine Zeile in CSV updaten
+    try:
+        _update_csv_row_for_art(artikelnr, mj)
+    except Exception:
+        # Fallback: wenn irgendwas schiefgeht, einmal komplett rebuild
+        _rebuild_csv_export()
 
-      img.title = isCover ? "Titelbild" : "Bild";
+    # Google Drive Backup (best-effort)
+    try:
+        _gdrive_backup_article(artikelnr)
+    except Exception:
+        pass
 
-      img.onclick = ()=>{
-        selectedImageUrl = url;
-        selectedFilename = fname;
-        thumb.innerHTML = `<img src="${url}">`;
 
-        // UI highlight
-        [...imgStrip.querySelectorAll('img')].forEach(el=> el.style.outline = "");
-        img.style.outline = "2px solid rgba(255,255,255,.85)";
+    return {"ok": True}
 
-        if(btnSetCover){
-          btnSetCover.classList.toggle("hidden", !selectedFilename);
+
+@app.get("/api/describe")
+def describe(artikelnr: str):
+    artikelnr = str(artikelnr).strip()
+    pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
+    if not pics:
+        return JSONResponse({"ok": False, "error": "Kein Bild für diese Artikelnummer gefunden."}, status_code=400)
+
+    img_path = pics[-1]
+
+    # set pending for manual too
+    mj = _load_meta_json(artikelnr)
+    mj["ki_source"] = "pending"
+    mj["ki_last_error"] = ""
+    mj["batch_done"] = False
+    mj["last_image"] = img_path.name
+    _save_meta_json(artikelnr, mj)
+
+    meta, ok, err, runtime_ms = _run_meta_once(artikelnr, img_path)
+
+    mj = _load_meta_json(artikelnr)
+    mj["ki_runtime_ms"] = runtime_ms
+    mj["last_image"] = img_path.name
+    mj["batch_done"] = True
+
+    if ok and meta:
+        _apply_ki_to_meta(mj, meta)
+        mj["ki_source"] = "realtime"
+        mj["ki_last_error"] = ""
+        mj["reviewed"] = False
+        _save_meta_json(artikelnr, mj)
+        _usage_success()
+        _rebuild_csv_export()
+        return {
+            "ok": True,
+            "title": mj["titel"],
+            "description": mj["beschreibung"],
+            "category": mj.get("kategorie", ""),
+            "retail_price": mj["retail_price"],
+            "rufpreis": mj["rufpreis"],
+            "ki_runtime_ms": runtime_ms,
         }
-      };
 
-      if(isCover){
-        // kleines Badge per outline (visuell leicht)
-        img.style.border = "2px solid rgba(255,215,0,.95)";
-      }
-
-      imgStrip.appendChild(img);
-    });
-
-    // Wenn vorhanden: erstes Bild automatisch anzeigen (damit man sofort sieht ob Upload/Löschen geklappt hat)
-    if(files.length){
-      const firstImg = imgStrip.querySelector('img');
-      if(firstImg) firstImg.click();
-    }else{
-      thumb.innerHTML = `<div class="muted">Kein Foto</div>`;
-      if(btnSetCover) btnSetCover.classList.add("hidden");
-    }
-
-    if(btnSetCover){
-      btnSetCover.classList.add("hidden");
-    }
-  }
+    mj["ki_source"] = "failed"
+    mj["ki_last_error"] = err or "ki_failed"
+    _save_meta_json(artikelnr, mj)
+    _usage_fail(mj["ki_last_error"])
+    _rebuild_csv_export()
+    return JSONResponse({"ok": False, "error": mj["ki_last_error"]}, status_code=502)
 
 
-  async function refreshMeta(){
-    const art = (fArt.value||"").trim();
-    if(!art) return;
-    const res = await fetch('/api/meta?artikelnr=' + encodeURIComponent(art));
-    const j = await res.json();
-    if(!j.ok) return;
-
-    fTitle.value = j.titel || "";
-    fDesc.value  = j.beschreibung || "";
-    fRetail.value = (j.retail_price ?? "");
-    fRuf.value    = (j.rufpreis ?? "");
-    applyPriceMode();
-
-    if(j.image){
-      thumb.innerHTML = `<img src="${j.image}">`;
-    }
-  }
-
-  async function pollUntilDone(art, maxMs=18000){
-    const start = Date.now();
-    setPill(true, "KI berechnet …");
-    statusText.textContent = "KI berechnet …";
-
-    while(Date.now() - start < maxMs){
-      const res = await fetch('/api/meta?artikelnr=' + encodeURIComponent(art));
-      const j = await res.json();
-      if(j.ok){
-        if(j.ki_source === 'realtime'){
-          fTitle.value = j.titel || "";
-          fDesc.value  = j.beschreibung || "";
-          fRetail.value = (j.retail_price ?? "");
-          fRuf.value    = (j.rufpreis ?? "");
-          applyPriceMode();
-          setPill(false);
-          statusText.textContent = "KI-Vorschlag übernommen.";
-          toast("KI fertig");
-          return;
-        }
-      }
-      await new Promise(r=>setTimeout(r, 700));
-    }
-    setPill(false);
-    statusText.textContent = "KI dauert länger – du kannst trotzdem weitermachen.";
-  }
-
-  function updateArtnrHint(){
-    if(!fArt.value){ artHint.textContent=""; return; }
-    if(validArtNr()){
-      artHint.textContent = "✓ OK";
-      artHint.className = "text-[11px] text-green-200 mt-1";
-    }else{
-      artHint.textContent = "⚠ Artikelnummer muss mindestens 6-stellig sein.";
-      artHint.className = "text-[11px] text-red-200 mt-1";
-    }
-  }
-
-  btnPhoto.onclick = ()=> fFile.click();
-  thumb.onclick = ()=> fFile.click();
-
-  fArt.addEventListener('input', updateArtnrHint);
-  fMenge.addEventListener('change', ()=>{});
-
-  fArt.addEventListener('blur', async ()=>{
-    updateArtnrHint();
-    if(!validArtNr()) return;
-    await refreshImages();
-    await refreshMeta();
-  });
-
-  btnDeletePhoto.onclick = async ()=>{
-    if(!validArtNr()) return alert("Artikelnummer muss mindestens 6-stellig sein.");
-    const art = (fArt.value||"").trim();
-
-    // UX: Wenn ein Bild ausgewählt ist -> genau dieses löschen, sonst wie bisher "letztes Foto"
-    const hasSelection = !!selectedFilename;
-    if(hasSelection){
-      const msg = "Ausgewähltes Foto wirklich löschen?\n\n" + selectedFilename + (selectedFilename === (window.__MYAUKTION_COVER||"") ? "\n(aktuelles Titelbild)" : "");
-      if(!confirm(msg)) return;
-
-      const res = await fetch('/api/delete_image', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({artikelnr: art, filename: selectedFilename})
-      });
-      const j = await res.json();
-      if(!res.ok || !j.ok){
-        alert("Löschen Fehler: " + (j.error || res.status));
-        return;
-      }
-      toast("Foto gelöscht");
-      await refreshImages();
-      await refreshMeta();
-      return;
-    }
-
-    if(!confirm("Letztes Foto wirklich löschen?")) return;
-    const res = await fetch('/api/delete_last_image', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({artikelnr: art})
-    });
-    const j = await res.json();
-    if(!res.ok || !j.ok){
-      alert("Löschen Fehler: " + (j.error || res.status));
-      return;
-    }
-    toast("Letztes Foto gelöscht");
-    await refreshImages();
-    await refreshMeta();
-  };
-
-  fFile.addEventListener('change', async ()=>{
-    if(!validArtNr()){
-      alert("Artikelnummer muss mindestens 6-stellig sein.");
-      fFile.value = "";
-      return;
-    }
-    const art = (fArt.value||"").trim();
-    const file = fFile.files[0];
-    if(!file) return;
-
-    const reader = new FileReader();
-    reader.onload = (ev)=> thumb.innerHTML = `<img src="${ev.target.result}">`;
-    reader.readAsDataURL(file);
-
-    const fd = new FormData();
-    fd.append('file', file);
-    fd.append('artikelnr', art);
-
-    log("Upload startet …");
-    setPill(true, "Upload …");
-
-    const res = await fetch('/api/upload', { method:'POST', body: fd });
-    const j = await res.json();
-    if(!res.ok || !j.ok){
-      setPill(false);
-      alert("Upload Fehler: " + (j.error || res.status));
-      return;
-    }
-
-    log("Upload OK: " + j.filename);
-    toast("Foto hochgeladen");
-    await refreshImages();
-    await pollUntilDone(art, 18000);
-  });
-
-  btnDescribe.onclick = async ()=>{
-    if(!validArtNr()) return alert("Artikelnummer muss mindestens 6-stellig sein.");
-    const art = (fArt.value||"").trim();
-    setPill(true, "Manuelle KI …");
-    const res = await fetch('/api/describe?artikelnr=' + encodeURIComponent(art));
-    const j = await res.json();
-    if(!res.ok || !j.ok){
-      setPill(false);
-      alert("KI Fehler: " + (j.error || res.status));
-      return;
-    }
-    fTitle.value = j.title || "";
-    fDesc.value = j.description || "";
-    fRetail.value = (j.retail_price ?? "");
-    fRuf.value = (j.rufpreis ?? "");
-    applyPriceMode();
-    setPill(false);
-    toast("KI übernommen");
-  };
-  function goNextArticle(){
-    const cur = (fArt.value||"").trim();
-    if(!/^[0-9]{1,}$/.test(cur)) return;
-    const next = String(parseInt(cur,10) + 1);
-    fArt.value = next;
-    if(typeof updateArtnrHint === "function") updateArtnrHint();
-    // Reset UI for next item (keep Lagerort + Settings)
-    thumb.innerHTML = '<span class="text-xs text-white/70 text-center">Tippen, um Foto aufzunehmen / auszuwählen</span>';
-    imgStrip.innerHTML = "";
-    fFile.value = "";
-    fTitle.value = "";
-    fDesc.value = "";
-    fRetail.value = "";
-    fRuf.value = "";
-    selectedImageUrl = "";
-    selectedFilename = "";
-    if(btnSetCover) btnSetCover.classList.add("hidden");
-    // Menge auf gespeicherten Default
-    try{ const s = loadSettings(); fMenge.value = String(s.menge ?? 1); }catch(e){}
-    // Settings beibehalten (Defaults bleiben)
-    if(typeof applyPriceMode === "function") applyPriceMode();
-    statusText.textContent = "Bereit.";
-    try{ window.scrollTo({top:0, behavior:"smooth"});}catch(e){}
-    fArt.focus();
-  }
+# ----------------------------
+# Admin API (Token geschützt)
+# ----------------------------
 
 
-
-  btnSave.onclick = async ()=>{
-    if(!validArtNr()) return alert("Artikelnummer muss mindestens 6-stellig sein.");
-    const art = (fArt.value||"").trim();
-    const s = loadSettings();
-
-    const mengeVal = parseInt((fMenge.value||"1"),10) || 1;
-
-    const payload = {
-      artikelnr: art,
-      lagerort: (fLager.value||"").trim(),
-
-      mitarbeiter: s.mitarbeiter,
-      menge: mengeVal,
-      lagerstand: s.lagerstand,
-      uebernehmen: s.uebernehmen,
-      einlieferer_id: s.einlieferer_id,
-      angeliefert: s.angeliefert,
-      betriebsmittel: s.betriebsmittel,
-      sortiment: s.sortiment,
-      einlieferer: s.einlieferer_id,
-
-      price_system_enabled: (s.price_system_enabled !== false),
-      retail_price: (s.price_system_enabled === false || s.hide_listprice === true) ? "" : (fRetail.value||""),
-      rufpreis: (s.price_system_enabled === false) ? 1 : (fRuf.value||0),
-
-      titel: (fTitle.value||"").trim(),
-      beschreibung: (fDesc.value||"").trim(),
-      reviewed: false
-    };
-
-    const res = await fetch('/api/save', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify(payload)
-    });
-    const j = await res.json();
-    if(!res.ok || !j.ok){
-      alert("Speichern Fehler: " + (j.error || res.status));
-      return;
-    }
-    toast("Gespeichert");
-    log("Gespeichert: " + art);
-  
-
-    // Felder die IMMER zurückgesetzt werden sollen
-    try{
-      fMenge.value = "1";
-      if(sLagerstand) sLagerstand.value = "1";
-      if(sUebernehmen) sUebernehmen.value = "1";
-      const s2 = loadSettings();
-      s2.menge = 1; s2.lagerstand = 1; s2.uebernehmen = 1;
-      saveSettings(s2);
-      applySettingsToUI();
-    }catch(e){}
-
-    goNextArticle();
-};
-
-  window.addEventListener('DOMContentLoaded', ()=>{
-    // Sortiment-Liste laden (Admin verwaltet)
-    async function loadSortimente(){
-      try{
-        const res = await fetch('/api/sortimente');
-        const j = await res.json();
-        const items = (j.items||[]);
-        if(sSortiment){
-          const cur = (loadSettings().sortiment || "");
-          sSortiment.innerHTML = '<option value="">(kein Sortiment)</option>' + items.map(x=>{
-            const v = String(x).replaceAll('"','&quot;');
-            return `<option value="${v}">${v}</option>`;
-          }).join('');
-          if(cur) sSortiment.value = cur;
-        }
-      }catch(e){}
-    }
-
-    if(window.lucide) lucide.createIcons();
-
-    applySettingsToUI();
-    applyPriceMode();
-    loadSortimente();
-
-    // Bearbeiten-Modus: aus Admin/Gesamtartikel kommend
-    try{
-      const qp = new URLSearchParams(window.location.search);
-      const editId = (qp.get("edit") || "").trim();
-      if(editId){
-        fArt.value = editId;
-        updateArtnrHint();
-        refreshImages();
-        refreshMeta();
-        toast("Bearbeiten: " + editId);
-      }
-    }catch(e){}
+@app.get("/api/admin/sortimente")
+def admin_sortimente(request: Request):
+    guard = _admin_guard(request)
+    if guard:
+        return guard
+    return {"ok": True, "items": _load_sortimente()}
 
 
-    if(btnSetCover){
-      btnSetCover.onclick = async ()=>{
-        if(!validArtNr()) return alert("Artikelnummer muss mindestens 6-stellig sein.");
-        if(!selectedFilename) return toast("Bitte ein Bild auswählen");
-        const art = (fArt.value||"").trim();
-        const res = await fetch('/api/set_cover', {
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({artikelnr: art, filename: selectedFilename})
-        });
-        const j = await res.json();
-        if(!res.ok || !j.ok){
-          alert("Titelbild Fehler: " + (j.error || res.status));
-          return;
-        }
-        toast("Titelbild gesetzt");
-        await refreshImages();
-      };
+@app.post("/api/admin/sortimente/add")
+def admin_sortimente_add(request: Request, data: Dict[str, Any]):
+    guard = _admin_guard(request)
+    if guard:
+        return guard
+    name = str(data.get("name", "") or "").strip()
+    if not name:
+        return JSONResponse({"ok": False, "error": "name fehlt"}, status_code=400)
+    items = _load_sortimente()
+    if name not in items:
+        items.append(name)
+        _save_sortimente(items)
+    return {"ok": True, "items": _load_sortimente()}
+
+
+@app.post("/api/admin/sortimente/rename")
+def admin_sortimente_rename(request: Request, data: Dict[str, Any]):
+    guard = _admin_guard(request)
+    if guard:
+        return guard
+    old = str(data.get("old", "") or "").strip()
+    new = str(data.get("new", "") or "").strip()
+    if not old or not new:
+        return JSONResponse({"ok": False, "error": "old/new fehlt"}, status_code=400)
+    items = _load_sortimente()
+    items = [new if x == old else x for x in items]
+    _save_sortimente(items)
+    return {"ok": True, "items": _load_sortimente()}
+
+
+@app.post("/api/admin/sortimente/delete")
+def admin_sortimente_delete(request: Request, data: Dict[str, Any]):
+    guard = _admin_guard(request)
+    if guard:
+        return guard
+    name = str(data.get("name", "") or "").strip()
+    if not name:
+        return JSONResponse({"ok": False, "error": "name fehlt"}, status_code=400)
+    items = [x for x in _load_sortimente() if x != name]
+    _save_sortimente(items)
+    return {"ok": True, "items": _load_sortimente()}
+
+@app.get("/api/admin/budget")
+def admin_budget(request: Request):
+    guard = _admin_guard(request)
+    if guard:
+        return guard
+
+    u = _load_usage()
+    budget = float(u.get("budget_eur", DEFAULT_BUDGET_EUR))
+    spent = float(u.get("spent_est_eur", 0.0))
+    remaining = round(max(budget - spent, 0.0), 4)
+
+    return {
+        "ok": True,
+        "budget_eur": budget,
+        "spent_est_eur": spent,
+        "remaining_est_eur": remaining,
+        "success_calls": int(u.get("success_calls", 0)),
+        "failed_calls": int(u.get("failed_calls", 0)),
+        "cost_per_success_call_eur": float(u.get("cost_per_success_call_eur", COST_PER_SUCCESS_CALL_EUR)),
+        "last_success_at": int(u.get("last_success_at", 0)),
+        "last_error": u.get("last_error", "") or "",
     }
 
 
-    btnSettings.onclick = toggleSettings;
+@app.get("/api/admin/articles")
+def admin_articles(request: Request, sortiment: str = "", only_failed: int = 0):
+    guard = _admin_guard(request)
+    if guard:
+        return guard
 
-    if(sSortiment){
-      sSortiment.onchange = ()=>{ const s=readSettingsFromUI(); saveSettings(s); applySettingsToUI(); };
-    }
+    items = []
+    for p in RAW_DIR.glob("*.json"):
+        try:
+            mj = json.loads(p.read_text("utf-8"))
+        except Exception:
+            continue
 
-    btnSettingsSave.onclick = ()=>{
-      const ns = readSettingsFromUI();
-      saveSettings(ns);
-      applySettingsToUI();
-      settingsPanel.classList.add('hidden');
-      btnSettings.textContent = "⚙️ Einstellungen";
-      toast("Einstellungen gespeichert");
-    };
+        nr = str(mj.get("artikelnr", p.stem))
+        cat = (mj.get("kategorie", "") or "").strip()
+        sorti = (mj.get("sortiment", "") or "").strip()
 
-    btnPriceToggle.onclick = ()=>{
-      const s = loadSettings();
-      s.price_system_enabled = (s.price_system_enabled === false) ? true : false;
-      saveSettings(s);
-      applySettingsToUI();
-      applyPriceMode();
-    };
+        if sortiment and sorti.lower() != sortiment.strip().lower():
+            continue
+        if only_failed and (mj.get("ki_source") != "failed"):
+            continue
+
+        pics = sorted(RAW_DIR.glob(f"{nr}_*.jpg"))
+        img_url = ""
+        if pics:
+            rel = pics[-1].relative_to(BASE_DIR)
+            img_url = "/static/" + str(rel).replace("\\", "/")
+
+        items.append({
+            "artikelnr": nr,
+            "titel": mj.get("titel", "") or "",
+            "beschreibung": mj.get("beschreibung", "") or "",
+            "kategorie": cat,
+            "sortiment": sorti,
+            "retail_price": mj.get("retail_price", 0.0) or 0.0,
+            "rufpreis": mj.get("rufpreis", 0.0) or 0.0,
+            "reviewed": bool(mj.get("reviewed", False)),
+            "ki_source": mj.get("ki_source", "") or "",
+            "ki_last_error": mj.get("ki_last_error", "") or "",
+            "last_image": mj.get("last_image", "") or "",
+            "image": img_url,
+        })
+
+    def _sort_key(x):
+        try:
+            return int(x["artikelnr"])
+        except Exception:
+            return x["artikelnr"]
+
+    items.sort(key=_sort_key)
+    return {"ok": True, "items": items}
 
 
-    if(btnToggleRetail){
-      btnToggleRetail.onclick = ()=>{
-        const s = loadSettings();
-        s.hide_listprice = (s.hide_listprice === true) ? false : true;
-        saveSettings(s);
-        applySettingsToUI();
-        applyPriceMode();
-      };
-    }
-
-    // Wenn noch nie gesetzt: einmal öffnen
-    const s0 = loadSettings();
-    if(!s0.mitarbeiter || !s0.einlieferer_id){
-      settingsPanel.classList.remove('hidden');
-      btnSettings.textContent = "⬆️ Einstellungen";
-    }
-  });
-</script>
-</body>
-</html>
+if __name__ == "__main__":
+    import os
+    import uvicorn
+    port = int(os.environ.get("PORT", "10000"))
+    uvicorn.run("server_full:app", host="0.0.0.0", port=port)
