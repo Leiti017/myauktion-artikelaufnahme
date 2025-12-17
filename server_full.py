@@ -84,6 +84,7 @@ CSV_FIELDS = [
     "Titel",
     "Beschreibung",
     "Preis",          # Rufpreis (ohne . oder ,)
+    "Listenpreis",    # optional, mit Komma (z.B. 199,99) – sonst leer
     "Lagerort",
     "Lagerstand",
     "Uebernehmen",
@@ -103,6 +104,20 @@ def _format_rufpreis(val: Any) -> str:
         f = 0.0
     # sauber runden und als int ausgeben
     return str(int(round(f)))
+
+def _format_listenpreis(val: any) -> str:
+    """Listenpreis mit Komma (z.B. 199,99). Leer bleibt leer."""
+    if val is None:
+        return ""
+    s = str(val).strip()
+    if s == "":
+        return ""
+    try:
+        f = float(s.replace(",", "."))
+    except Exception:
+        return ""
+    # zwei Nachkommastellen, dann Punkt -> Komma
+    return f"{f:.2f}".replace(".", ",")
 
 
 def _ensure_export_csv_exists() -> None:
@@ -496,6 +511,7 @@ def export_csv(from_nr: str | None = None, to_nr: str | None = None):
             str(meta.get("titel") or ""),
             str(meta.get("beschreibung") or ""),
             _format_rufpreis(meta.get("rufpreis", 0)),
+            _format_listenpreis(meta.get("listenpreis", "")),
             str(meta.get("lagerort") or ""),
             str(int(meta.get("lagerstand") or 1)),
             str(int(meta.get("uebernehmen") or 1)),
@@ -511,7 +527,7 @@ def export_csv(from_nr: str | None = None, to_nr: str | None = None):
     for r in rows:
         w.writerow(r)
     content = ("\ufeff" + bio.getvalue()).encode("utf-8")
-    return Response(content, media_type="text/csv", headers={"Content-Disposition":"attachment; filename=eartikel_export.csv"})
+    return Response(content, media_type="text/csv", headers={"Content-Disposition":"attachment; filename=artikel_export.csv"})
 
 
 @app.get("/api/next_artikelnr")
