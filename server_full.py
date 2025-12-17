@@ -77,7 +77,7 @@ EXPORT_CSV = EXPORT_DIR / "eartikel_export.csv"
 # ----------------------------
 # CSV Export helpers (UTF-8 BOM + schneller Update)
 # ----------------------------
-CSV_HEADERS = ["ArtikelNr","Menge","Bezeichnung","Beschreibung","Preis","Lagerort","Lagerstand","uebernehmen","Einlieferer-ID","angeliefert","Betriebsmittel"]
+CSV_HEADERS = CSV_FIELDS
 
 def _format_price_1dp(val: Any) -> str:
     try:
@@ -107,7 +107,7 @@ def _update_csv_row_for_art(artikelnr: str, meta: Dict[str, Any]) -> None:
     if raw.startswith(b"\xef\xbb\xbf"):
         raw = raw[3:]
     text = raw.decode("utf-8", errors="replace")
-    rdr = csv.reader(io.StringIO(text))
+    rdr = csv.reader(io.StringIO(text), delimiter=";")
     rows = list(rdr)
 
     # Ensure headers
@@ -128,7 +128,9 @@ def _update_csv_row_for_art(artikelnr: str, meta: Dict[str, Any]) -> None:
     einl = str(meta.get("einlieferer_id") or meta.get("einlieferer") or "")
     angel = str(meta.get("angeliefert") or "")
     betr = str(meta.get("betriebsmittel") or "")
-    new_row = [art, str(menge), titel, beschr, preis, lagerort, str(lagerstand), str(uebernehmen), einl, angel, betr]
+    mitarbeiter = str(meta.get("mitarbeiter") or meta.get("mitarbeiter_name") or "")
+
+    new_row = [art, str(menge), titel, beschr, preis, lagerort, str(lagerstand), str(uebernehmen), einl, angel, betr, mitarbeiter]
 
     # Replace or append
     out_rows = [rows[0]]
@@ -144,7 +146,7 @@ def _update_csv_row_for_art(artikelnr: str, meta: Dict[str, Any]) -> None:
 
     # Write back with BOM
     bio = io.StringIO()
-    w = csv.writer(bio, delimiter=",", quotechar='"', quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
+    w = csv.writer(bio, delimiter=";", quotechar='"', quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
     for r in out_rows:
         w.writerow(r)
     EXPORT_CSV.write_bytes(("\ufeff" + bio.getvalue()).encode("utf-8"))
@@ -281,6 +283,7 @@ CSV_FIELDS = [
     "EinliefererID",
     "Angeliefert",
     "Betriebsmittel",
+    "Mitarbeiter",
 ]
 
 
@@ -307,6 +310,7 @@ def _rebuild_csv_export() -> None:
             "EinliefererID": d.get("einlieferer_id", d.get("einlieferer", "")) or "",
             "Angeliefert": d.get("angeliefert", "") or "",
             "Betriebsmittel": d.get("betriebsmittel", "") or "",
+            "Mitarbeiter": d.get("mitarbeiter", d.get("mitarbeiter_name","")) or "",
         })
 
     def _sort_key(r):
@@ -440,7 +444,7 @@ def export_csv(from_nr: str | None = None, to_nr: str | None = None):
 
     # Kein Filter -> Datei direkt ausliefern
     if not from_nr and not to_nr:
-        return FileResponse(str(EXPORT_CSV), filename="eartikel_export.csv", media_type="text/csv")
+        return FileResponse(str(EXPORT_CSV), filename="artikel_export.csv", media_type="text/csv")
 
     # Filter -> in-memory CSV erzeugen
     def _in_range(n: str) -> bool:
@@ -479,10 +483,11 @@ def export_csv(from_nr: str | None = None, to_nr: str | None = None):
             str(meta.get("einlieferer_id") or meta.get("einlieferer") or ""),
             str(meta.get("angeliefert") or ""),
             str(meta.get("betriebsmittel") or ""),
+            str(meta.get("mitarbeiter") or meta.get("mitarbeiter_name") or ""),
         ])
 
     bio = io.StringIO()
-    w = csv.writer(bio, delimiter=",", quotechar='"', quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
+    w = csv.writer(bio, delimiter=";", quotechar='"', quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
     w.writerow(CSV_HEADERS)
     for r in rows:
         w.writerow(r)
