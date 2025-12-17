@@ -34,6 +34,7 @@
     .btn{padding:.55rem 1rem;border-radius:999px;font-weight:700;display:inline-flex;align-items:center;gap:.45rem}
     .btn-primary{background:#fff;color:#0f172a;box-shadow:0 8px 18px rgba(0,0,0,.2)}
     .btn-ghost{color:#fff;border:1px solid rgba(255,255,255,.35);background:transparent}
+    .btn-danger{background:#ef4444;color:#fff;border:1px solid rgba(255,255,255,.0)}
     .input, select{
       width:100%;padding:.55rem .9rem;border-radius:.75rem;background:rgba(255,255,255,.96);
       color:#0f172a;outline:none;border:1px solid transparent;font-size:.9rem
@@ -107,15 +108,14 @@
             <div>
               <label class="block mb-1 text-xs opacity-80">Mitarbeiter</label>
               <select id="s-mitarbeiter" class="input">
-                <option>Jan</option><option>Rene</option><option>Karin</option><option>Katharina</option><option>Gast1</option><option>Gast2</option><option>Gast3</option>
+                <option>Jan</option><option>Rene</option><option>Karin</option><option>Katharina</option>
                 <option>Linda</option><option>Jasmin</option><option>Natascha</option>
               </select>
             </div>
 
             <div>
-              <label class="block mb-1 text-xs opacity-80">Menge</label>
-              <input id="s-menge" type="number" class="input" value="1" min="1">
-            </div>
+              <input id="s-menge" type="number" class="input hidden" value="1">
+</div>
 
             <div>
               <label class="block mb-1 text-xs opacity-80">Lagerstand</label>
@@ -148,7 +148,7 @@
         <!-- HAUPTMASKE -->
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
           <div>
-            <label class="block mb-1 text-xs opacity-80">Artikelnummer (mind. 6-stellig)</label>
+            <label class="block mb-1 text-xs opacity-80">Artikelnr. (min. 6-stellig)</label>
             <input id="f-artikelnr" type="number" inputmode="numeric" class="input" autocomplete="off" placeholder="z.B. 810233">
             <div id="artnr-hint" class="text-[11px] text-white/80 mt-1"></div>
           </div>
@@ -208,8 +208,11 @@
             <div class="flex items-center justify-between mb-1">
               <label class="block text-xs opacity-80">Listenpreis (€)</label>
               <button id="btn-price-toggle" class="btn btn-ghost text-[11px]" type="button">Preis-System ausschalten</button>
+              <button id="btn-retail-hide" class="btn btn-ghost text-[11px]" type="button">Listenpreis ausblenden</button>
             </div>
-            <input id="f-retail" type="number" class="input">
+            <div id="retail-input-wrap">
+              <input id="f-retail" type="number" class="input">
+            </div>
           </div>
           <div>
             <label class="block mb-1 text-xs opacity-80">Rufpreis</label>
@@ -245,6 +248,8 @@
   const btnSave = document.getElementById('btn-save');
   const btnDescribe = document.getElementById('btn-describe');
   const btnPriceToggle = document.getElementById('btn-price-toggle');
+  const btnRetailHide = document.getElementById('btn-retail-hide');
+  const retailWrap = document.getElementById('retail-input-wrap');
 
   const statusText = document.getElementById('status-text');
   const statusPill = document.getElementById('status-pill');
@@ -261,17 +266,7 @@
 
   const sEinl = document.getElementById('s-einlieferer-id');
   const sMit  = document.getElementById('s-mitarbeiter');
-  const LS_KEY_MIT = 'ma_mitarbeiter';
-  try {
-    const savedMit = localStorage.getItem(LS_KEY_MIT);
-    if(savedMit && [...sMit.options].some(o=>o.value===savedMit || o.text===savedMit)) {
-      sMit.value = savedMit;
-    }
-  } catch(e) {}
-  sMit.addEventListener('change', ()=>{
-    try { localStorage.setItem(LS_KEY_MIT, sMit.value); } catch(e) {}
-  });
-  const sMenge = document.getElementById('s-menge');
+  const sMenge = document.getElementById('f-menge') || document.getElementById('s-menge');
   const sLagerstand = document.getElementById('s-lagerstand');
   const sUebernehmen = document.getElementById('s-uebernehmen');
   const sAngeliefert = document.getElementById('s-angeliefert');
@@ -284,16 +279,17 @@
       const d = raw ? JSON.parse(raw) : {};
       return Object.assign({
         einlieferer_id: "22",
-        mitarbeiter: "Jan",
+        mitarbeiter: "",
         menge: 1,
         lagerstand: 1,
         uebernehmen: 1,
         angeliefert: "",
         betriebsmittel: "",
-        price_system_enabled: true
+        price_system_enabled: true,
+        retail_hidden: false
       }, d || {});
     }catch(e){
-      return {einlieferer_id:"22",mitarbeiter:"Jan",menge:1,lagerstand:1,uebernehmen:1,angeliefert:"",betriebsmittel:"",price_system_enabled:true};
+      return {einlieferer_id:"22",mitarbeiter:"Jan",menge:1,lagerstand:1,uebernehmen:1,angeliefert:"",betriebsmittel:"",price_system_enabled:true, retail_hidden:false};
     }
   }
   function saveSettings(s){ try{ localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); }catch(e){} }
@@ -630,6 +626,15 @@
       applySettingsToUI();
       applyPriceMode();
     };
+
+btnRetailHide && (btnRetailHide.onclick = ()=>{
+  const s = loadSettings();
+  s.retail_hidden = (s.retail_hidden === true) ? false : true;
+  saveSettings(s);
+  applySettingsToUI();
+  applyPriceMode();
+});
+
 
     // Wenn noch nie gesetzt: einmal öffnen
     const s0 = loadSettings();
