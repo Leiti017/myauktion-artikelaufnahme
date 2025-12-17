@@ -462,26 +462,8 @@ def _usage_fail(err: str) -> None:
 
 
 # ----------------------------
-# CSV Export
+# CSV Export (Rebuild nutzt dieselben CSV_FIELDS wie Live-Update)
 # ----------------------------
-CSV_FIELDS = [
-    "ArtikelNr",
-    "Menge",
-    "Preis",
-    "Ladenpreis",
-    "Lagerort",
-    "Lagerstand",
-    "Uebernehmen",
-    "Sortiment",
-    "Kategorie",
-    "EinliefererID",
-    "Angeliefert",
-    "Betriebsmittel",
-]
-
-
-
-CSV_HEADERS = CSV_FIELDS
 def _rebuild_csv_export() -> None:
     rows = []
     for meta_file in RAW_DIR.glob("*.json"):
@@ -491,22 +473,35 @@ def _rebuild_csv_export() -> None:
             continue
 
         nr = str(d.get("artikelnr") or meta_file.stem)
-        rows.append({
-            "ArtikelNr": nr,
-            "Menge": d.get("menge", 1) or 1,
-            # Preis = Rufpreis (Startpreis), Ladenpreis = Listenpreis
-            "Preis": d.get("rufpreis", 0.0) or 0.0,
-            "Ladenpreis": d.get("retail_price", 0.0) or 0.0,
-            "Lagerort": d.get("lagerort", "") or "",
-            "Lagerstand": d.get("lagerstand", 1) or 1,
-            "Uebernehmen": d.get("uebernehmen", 1) or 1,
-            "Sortiment": d.get("sortiment", "") or "",
-            "Kategorie": d.get("kategorie", "") or "",
-            "EinliefererID": d.get("einlieferer_id", d.get("einlieferer", "")) or "",
-            "Angeliefert": d.get("angeliefert", "") or "",
-            "Betriebsmittel": d.get("betriebsmittel", "") or "",
-        })
+rows.append({
 
+    "ArtikelNr": nr,
+
+    "Menge": d.get("menge", 1) or 1,
+
+    "Titel": d.get("titel", "") or "",
+
+    "Beschreibung": d.get("beschreibung", "") or "",
+
+    # Preis = Rufpreis (Startpreis)
+
+    "Preis": _format_rufpreis(d.get("rufpreis", 0.0) or 0.0),
+
+    "Lagerort": d.get("lagerort", "") or "",
+
+    "Lagerstand": d.get("lagerstand", 1) or 1,
+
+    "Uebernehmen": d.get("uebernehmen", 1) or 1,
+
+    "EinliefererID": d.get("einlieferer_id", d.get("einlieferer", "")) or "",
+
+    "Angeliefert": d.get("angeliefert", "") or "",
+
+    "Betriebsmittel": d.get("betriebsmittel", "") or "",
+
+    "Mitarbeiter": d.get("mitarbeiter", "") or "",
+
+})
     def _sort_key(r):
         try:
             return int(r["ArtikelNr"])
@@ -515,7 +510,7 @@ def _rebuild_csv_export() -> None:
 
     rows.sort(key=_sort_key)
 
-    with EXPORT_CSV.open("w", newline="", encoding="utf-8") as f:
+    with EXPORT_CSV.open("w", newline="", encoding="utf-8-sig") as f:
         w = csv.DictWriter(f, fieldnames=CSV_FIELDS, delimiter=";")
         w.writeheader()
         for r in rows:
@@ -638,7 +633,7 @@ def export_csv(from_nr: str | None = None, to_nr: str | None = None):
 
     # Kein Filter -> Datei direkt ausliefern
     if not from_nr and not to_nr:
-        return FileResponse(str(EXPORT_CSV), filename="eartikel_export.csv", media_type="text/csv")
+        return FileResponse(str(EXPORT_CSV), filename="artikel_export.csv", media_type="text/csv")
 
     # Filter -> in-memory CSV erzeugen
     def _in_range(n: str) -> bool:
@@ -677,6 +672,7 @@ def export_csv(from_nr: str | None = None, to_nr: str | None = None):
             str(meta.get("einlieferer_id") or meta.get("einlieferer") or ""),
             str(meta.get("angeliefert") or ""),
             str(meta.get("betriebsmittel") or ""),
+            str(meta.get("mitarbeiter") or ""),
         ])
 
     bio = io.StringIO()
@@ -685,7 +681,7 @@ def export_csv(from_nr: str | None = None, to_nr: str | None = None):
     for r in rows:
         w.writerow(r)
     content = ("\ufeff" + bio.getvalue()).encode("utf-8")
-    return Response(content, media_type="text/csv", headers={"Content-Disposition":"attachment; filename=eartikel_export.csv"})
+    return Response(content, media_type="text/csv", headers={"Content-Disposition":"attachment; filename=artikel_export.csv"})
 
 
 @app.get("/api/next_artikelnr")
