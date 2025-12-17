@@ -404,6 +404,9 @@ def _run_meta_background(artikelnr: str, img_path: Path) -> None:
     meta, ok, err, runtime_ms = _run_meta_once(artikelnr, img_path)
 
     mj = _load_meta_json(artikelnr)
+    # Wenn noch kein Titelbild gesetzt ist, nimm das erste hochgeladene Foto als Titelbild
+    if not mj.get("title_image"):
+        mj["title_image"] = out.name
     mj["ki_runtime_ms"] = runtime_ms
     mj["last_image"] = img_path.name
     mj["batch_done"] = True
@@ -567,10 +570,26 @@ async def upload(
 @app.get("/api/images")
 def images(artikelnr: str):
     artikelnr = str(artikelnr).strip()
+    mj = _load_meta_json(artikelnr)
+    title = str(mj.get("title_image", "") or "").strip()
+
+    pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
+    ordered = []
+    # Titelbild zuerst (falls vorhanden)
+    if title:
+        p = RAW_DIR / title
+        if p.exists():
+            ordered.append(p)
+    # Rest (ohne Duplikat)
+    for p in pics:
+        if title and p.name == title:
+            continue
+        ordered.append(p)
+
     files = []
-    for f in sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg")):
+    for f in ordered:
         rel = f.relative_to(BASE_DIR)
-        files.append("/static/" + str(rel).replace("\\", "/"))
+        files.append("/static/" + str(rel).replace("\", "/"))
     return {"ok": True, "files": files}
 
 
@@ -628,6 +647,27 @@ def delete_image(payload: Dict[str, Any]):
     return {"ok": True}
 
 
+
+@app.post("/api/set_title_image")
+def set_title_image(payload: Dict[str, Any]):
+    artikelnr = str(payload.get("artikelnr", "")).strip()
+    filename = str(payload.get("filename", "")).strip()
+    if not artikelnr or not filename:
+        return JSONResponse({"ok": False, "error": "artikelnr/filename fehlt"}, status_code=400)
+
+    if not filename.startswith(f"{artikelnr}_") or not filename.lower().endswith(".jpg"):
+        return JSONResponse({"ok": False, "error": "ungültiger Dateiname"}, status_code=400)
+
+    path = RAW_DIR / filename
+    if not path.exists():
+        return JSONResponse({"ok": False, "error": "Datei nicht gefunden"}, status_code=404)
+
+    mj = _load_meta_json(artikelnr)
+    mj["title_image"] = filename
+    _save_meta_json(artikelnr, mj)
+
+    return {"ok": True, "title_image": filename}
+
 @app.get("/api/meta")
 def meta(artikelnr: str):
     artikelnr = str(artikelnr).strip()
@@ -635,9 +675,13 @@ def meta(artikelnr: str):
 
     pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
     img_url = ""
-    if pics:
+    title = str(mj.get("title_image","") or "").strip()
+    if title and (RAW_DIR / title).exists():
+        rel = (RAW_DIR / title).relative_to(BASE_DIR)
+        img_url = "/static/" + str(rel).replace("\", "/")
+    elif pics:
         rel = pics[-1].relative_to(BASE_DIR)
-        img_url = "/static/" + str(rel).replace("\\", "/")
+        img_url = "/static/" + str(rel).replace("\", "/")
 
     return {
         "ok": True,
@@ -654,6 +698,7 @@ def meta(artikelnr: str):
         "ki_source": mj.get("ki_source", "") or "",
         "ki_last_error": mj.get("ki_last_error", "") or "",
         "last_image": mj.get("last_image", "") or "",
+        "title_image": mj.get("title_image", "") or "",
         "image": img_url,
     }
 

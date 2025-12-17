@@ -57,7 +57,8 @@
     .toast{background:#fff;color:#0f172a;border-radius:999px;padding:7px 12px;font-weight:700;box-shadow:0 10px 30px rgba(0,0,0,.18);opacity:0;transform:translateY(-6px) scale(.94);transition:.18s}
     .toast.show{opacity:1;transform:translateY(0) scale(1)}
     .price-off{border:2px solid rgba(239,68,68,.9)!important;background:rgba(254,242,242,.95)!important}
-  </style>
+  .img-strip img.selected{outline:2px solid rgba(255,255,255,.9); outline-offset:2px; border-radius:10px;}
+</style>
 </head>
 
 <body class="text-white">
@@ -98,7 +99,8 @@
             <div>
               <label class="block mb-1 text-xs opacity-80">Einlieferer-ID</label>
               <select id="s-einlieferer-id" class="input">
-                <option value="22" selected>22</option>
+                <option value="" selected>—</option>
+                <option value="22">22</option>
                 <option value="55">55</option>
                 <option value="66">66</option>
                 <option value="65461">65461</option>
@@ -108,6 +110,7 @@
             <div>
               <label class="block mb-1 text-xs opacity-80">Mitarbeiter</label>
               <select id="s-mitarbeiter" class="input">
+                <option value="" selected>—</option>
                 <option>Jan</option><option>Rene</option><option>Karin</option><option>Katharina</option>
                 <option>Linda</option><option>Jasmin</option><option>Natascha</option><option>Gast1</option><option>Gast2</option><option>Gast3</option>
               </select>
@@ -173,6 +176,11 @@
 
           <button id="btn-delete-photo" class="btn btn-ghost text-sm">
             <i data-lucide="trash-2" class="w-4 h-4"></i> Foto löschen
+          </button>
+
+
+          <button id="btn-set-title" class="btn btn-ghost text-sm" type="button">
+            <i data-lucide="image" class="w-4 h-4"></i> Als Titelbild setzen
           </button>
 
           <button id="btn-save" class="btn btn-ghost text-sm">
@@ -244,6 +252,8 @@
 
   const btnPhoto = document.getElementById('btn-photo');
   const btnDeletePhoto = document.getElementById('btn-delete-photo');
+  const btnSetTitle = document.getElementById('btn-set-title');
+  let selectedFilename = "";
   const btnSave = document.getElementById('btn-save');
   const btnDescribe = document.getElementById('btn-describe');
   const btnPriceToggle = document.getElementById('btn-price-toggle');
@@ -260,7 +270,7 @@
   const toastWrap = document.getElementById('toast-wrap');
 
   // ⚙️ Settings
-  const SETTINGS_KEY = "MYAUKTION_SETTINGS_V1";
+  const SETTINGS_KEY = "MYAUKTION_SETTINGS_V2";
   const btnSettings = document.getElementById('btn-settings');
   const settingsPanel = document.getElementById('settings-panel');
   const settingsMini = document.getElementById('settings-mini');
@@ -278,8 +288,8 @@
       const raw = localStorage.getItem(SETTINGS_KEY);
       const d = raw ? JSON.parse(raw) : {};
       return Object.assign({
-        einlieferer_id: "22",
-        mitarbeiter: "Jan",
+        einlieferer_id: "",
+        mitarbeiter: "",
         menge: 1,
         lagerstand: 1,
         uebernehmen: 1,
@@ -289,7 +299,7 @@
         ,hide_listprice: false
       }, d || {});
     }catch(e){
-      return {einlieferer_id:"22",mitarbeiter:"Jan",menge:1,lagerstand:1,uebernehmen:1,angeliefert:"",betriebsmittel:"",price_system_enabled:true};
+      return {einlieferer_id:"",mitarbeiter:"",menge:1,lagerstand:1,uebernehmen:1,angeliefert:"",betriebsmittel:"",price_system_enabled:true, hide_listprice:false};
     }
   }
   function saveSettings(s){ try{ localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); }catch(e){} }
@@ -309,8 +319,8 @@
 
   function applySettingsToUI(){
     const s = loadSettings();
-    sEinl.value = s.einlieferer_id || "22";
-    sMit.value = s.mitarbeiter || "Jan";
+    sEinl.value = s.einlieferer_id || "";
+    sMit.value = s.mitarbeiter || "";
     sLagerstand.value = String(s.lagerstand ?? 1);
     sUebernehmen.value = String(s.uebernehmen ?? 1);
     sAngeliefert.value = s.angeliefert || "";
@@ -414,7 +424,15 @@
     (j.files||[]).forEach(url=>{
       const img = document.createElement('img');
       img.src = url;
-      img.onclick = ()=> thumb.innerHTML = `<img src="${url}">`;
+      const fn = (url.split('/').pop() || "");
+      img.dataset.filename = fn;
+      if(selectedFilename && fn === selectedFilename){ img.classList.add('selected'); }
+      img.onclick = ()=>{
+        selectedFilename = fn;
+        Array.from(imgStrip.querySelectorAll('img')).forEach(x=>x.classList.remove('selected'));
+        img.classList.add('selected');
+        thumb.innerHTML = `<img src="${url}">`;
+      };
       imgStrip.appendChild(img);
     });
   }
@@ -434,6 +452,7 @@
 
     if(j.image){
       thumb.innerHTML = `<img src="${j.image}">`;
+      try{ selectedFilename = (j.image.split("/").pop()||""); }catch(e){}
     }
   }
 
@@ -505,6 +524,28 @@
     await refreshMeta();
   };
 
+
+  btnSetTitle && (btnSetTitle.onclick = async ()=>{
+    if(!validArtNr()) return alert("Artikelnummer muss mindestens 6-stellig sein.");
+    const art = (fArt.value||"").trim();
+    if(!selectedFilename){
+      return alert("Bitte zuerst unten ein Foto anklicken (auswählen), dann 'Als Titelbild setzen'.");
+    }
+    const res = await fetch('/api/set_title_image', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({artikelnr: art, filename: selectedFilename})
+    });
+    const j = await res.json();
+    if(!res.ok || !j.ok){
+      alert("Titelbild Fehler: " + (j.error || res.status));
+      return;
+    }
+    toast("Titelbild gesetzt");
+    await refreshImages();
+    await refreshMeta();
+  });
+
   fFile.addEventListener('change', async ()=>{
     if(!validArtNr()){
       alert("Artikelnummer muss mindestens 6-stellig sein.");
@@ -573,9 +614,7 @@
     fDesc.value = "";
     fRetail.value = "";
     fRuf.value = "";
-    // Immer zurücksetzen
-    sLagerstand.value = "1";
-    sUebernehmen.value = "1";
+    // Settings bleiben (Einlieferer/Lagerstand/Übernehmen/etc.)
     if(typeof applyPriceMode === "function") applyPriceMode();
     statusText.textContent = "Bereit.";
     try{ window.scrollTo({top:0, behavior:"smooth"});}catch(e){}
@@ -588,6 +627,7 @@
     if(!validArtNr()) return alert("Artikelnummer muss mindestens 6-stellig sein.");
     const art = (fArt.value||"").trim();
     const s = loadSettings();
+    const mengeVal = parseInt((fMenge.value||"1"),10) || 1;
 
     // Menge auch in Settings speichern (damit es beim nächsten Artikel gleich bleibt)
     try{ s.menge = mengeVal; saveSettings(s); applySettingsToUI(); }catch(e){}
