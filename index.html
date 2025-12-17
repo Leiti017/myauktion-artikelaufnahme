@@ -112,12 +112,7 @@
                 <option>Linda</option><option>Jasmin</option><option>Natascha</option>
               </select>
             </div>
-
-            <div>
-              <input id="s-menge" type="number" class="input hidden" value="1">
-</div>
-
-            <div>
+<div>
               <label class="block mb-1 text-xs opacity-80">Lagerstand</label>
               <input id="s-lagerstand" type="number" class="input" value="1" min="1">
             </div>
@@ -146,13 +141,17 @@
         <div id="settings-mini" class="text-[11px] text-white/80 mb-3"></div>
 
         <!-- HAUPTMASKE -->
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
           <div>
             <label class="block mb-1 text-xs opacity-80">Artikelnr. (min. 6-stellig)</label>
             <input id="f-artikelnr" type="number" inputmode="numeric" class="input" autocomplete="off" placeholder="z.B. 810233">
             <div id="artnr-hint" class="text-[11px] text-white/80 mt-1"></div>
           </div>
           <div>
+  <label class="block mb-1 text-xs opacity-80">Menge</label>
+  <input id="f-menge" type="number" class="input" value="1" min="1" step="1">
+</div>
+<div>
             <label class="block mb-1 text-xs opacity-80">Lagerort</label>
             <input id="f-lagerort" type="text" class="input" placeholder="z.B. (22) Haushalt/Freizeit 170">
           </div>
@@ -266,7 +265,7 @@
 
   const sEinl = document.getElementById('s-einlieferer-id');
   const sMit  = document.getElementById('s-mitarbeiter');
-  const sMenge = document.getElementById('f-menge') || document.getElementById('s-menge');
+  const sMenge = document.getElementById('f-menge');
   const sLagerstand = document.getElementById('s-lagerstand');
   const sUebernehmen = document.getElementById('s-uebernehmen');
   const sAngeliefert = document.getElementById('s-angeliefert');
@@ -308,23 +307,46 @@
   }
 
   function applySettingsToUI(){
-    const s = loadSettings();
-    sEinl.value = s.einlieferer_id || "22";
-    sMit.value = s.mitarbeiter || "Jan";
-    sMenge.value = String(s.menge ?? 1);
-    sLagerstand.value = String(s.lagerstand ?? 1);
-    sUebernehmen.value = String(s.uebernehmen ?? 1);
-    sAngeliefert.value = s.angeliefert || "";
-    sBetriebsmittel.value = s.betriebsmittel || "";
-    settingsMini.textContent = "Einstellungen: " + settingsText(s);
+  const s = loadSettings();
+
+  // Defaults in Settings-Panel
+  sEinl.value = s.einlieferer_id || "22";
+  sMit.value = s.mitarbeiter || "Jan";
+  if(sMenge) sMenge.value = String(s.menge ?? 1);
+  sLagerstand.value = String(s.lagerstand ?? 1);
+  sUebernehmen.value = String(s.uebernehmen ?? 1);
+  sAngeliefert.value = s.angeliefert || "";
+  sBetriebsmittel.value = s.betriebsmittel || "";
+
+  // Retail hide (Listenpreis ausblenden)
+  const rh = (s.retail_hidden === true);
+  if(retailWrap){
+    retailWrap.classList.toggle('hidden', rh);
   }
+  if(btnRetailHide){
+    btnRetailHide.textContent = rh ? "Listenpreis einblenden" : "Listenpreis ausblenden";
+    btnRetailHide.classList.toggle('btn-danger', rh);
+    btnRetailHide.classList.toggle('btn-ghost', !rh);
+  }
+
+  // Preis-System Button State
+  const enabled = (s.price_system_enabled !== false);
+  if(btnPriceToggle){
+    btnPriceToggle.textContent = enabled ? "Preis-System ausschalten" : "Preis-System einschalten";
+    btnPriceToggle.classList.toggle('btn-danger', !enabled);
+    btnPriceToggle.classList.toggle('btn-ghost', enabled);
+  }
+
+  settingsMini.textContent = "Einstellungen: " + settingsText(s);
+}
+
 
   function readSettingsFromUI(){
     const prev = loadSettings();
     return {
       einlieferer_id: (sEinl.value||"").trim(),
       mitarbeiter: (sMit.value||"").trim(),
-      menge: parseInt(sMenge.value||"1",10) || 1,
+      menge: (sMenge ? (parseInt(sMenge.value||"1",10)||1) : 1),
       lagerstand: parseInt(sLagerstand.value||"1",10) || 1,
       uebernehmen: parseInt(sUebernehmen.value||"1",10) || 1,
       angeliefert: (sAngeliefert.value||"").trim(),
@@ -340,12 +362,35 @@
   }
 
   function applyPriceMode(){
-    const s = loadSettings();
-    const enabled = (s.price_system_enabled !== false);
-    if(btnPriceToggle){
-      btnPriceToggle.textContent = enabled ? "Preis-System ausschalten" : "Preis-System einschalten";
-    }
-    if(!enabled){
+  const s = loadSettings();
+  const enabled = (s.price_system_enabled !== false);
+  const rh = (s.retail_hidden === true);
+
+  // Button state handled in applySettingsToUI, but keep safe:
+  if(btnPriceToggle){
+    btnPriceToggle.textContent = enabled ? "Preis-System ausschalten" : "Preis-System einschalten";
+    btnPriceToggle.classList.toggle('btn-danger', !enabled);
+    btnPriceToggle.classList.toggle('btn-ghost', enabled);
+  }
+
+  // Retail hide
+  if(retailWrap){
+    retailWrap.classList.toggle('hidden', rh);
+  }
+  if(rh){
+    fRetail.value = "";
+  }
+
+  if(!enabled){
+    fRetail.value = "";
+    fRuf.value = "1";
+    fRetail.classList.add("price-off");
+    fRuf.classList.add("price-off");
+  }else{
+    fRetail.classList.remove("price-off");
+    fRuf.classList.remove("price-off");
+  }
+}    if(!enabled){
       fRetail.value = "";
       fRuf.value = "1";
       fRetail.classList.add("price-off");
