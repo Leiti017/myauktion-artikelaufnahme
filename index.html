@@ -439,6 +439,7 @@
 
     const files = (j.files||[]);
     const cover = (j.cover||"").trim();
+    window.__MYAUKTION_COVER = cover;
 
     files.forEach((url, idx)=>{
       const img = document.createElement('img');
@@ -468,7 +469,7 @@
 
       if(isCover){
         // kleines Badge per outline (visuell leicht)
-        img.style.border = "2px solid rgba(239,68,68,.75)";
+        img.style.border = "2px solid rgba(255,215,0,.95)";
       }
 
       imgStrip.appendChild(img);
@@ -561,6 +562,29 @@
   btnDeletePhoto.onclick = async ()=>{
     if(!validArtNr()) return alert("Artikelnummer muss mindestens 6-stellig sein.");
     const art = (fArt.value||"").trim();
+
+    // UX: Wenn ein Bild ausgewählt ist -> genau dieses löschen, sonst wie bisher "letztes Foto"
+    const hasSelection = !!selectedFilename;
+    if(hasSelection){
+      const msg = "Ausgewähltes Foto wirklich löschen?\n\n" + selectedFilename + (selectedFilename === (window.__MYAUKTION_COVER||"") ? "\n(aktuelles Titelbild)" : "");
+      if(!confirm(msg)) return;
+
+      const res = await fetch('/api/delete_image', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({artikelnr: art, filename: selectedFilename})
+      });
+      const j = await res.json();
+      if(!res.ok || !j.ok){
+        alert("Löschen Fehler: " + (j.error || res.status));
+        return;
+      }
+      toast("Foto gelöscht");
+      await refreshImages();
+      await refreshMeta();
+      return;
+    }
+
     if(!confirm("Letztes Foto wirklich löschen?")) return;
     const res = await fetch('/api/delete_last_image', {
       method:'POST',
@@ -572,7 +596,7 @@
       alert("Löschen Fehler: " + (j.error || res.status));
       return;
     }
-    toast("Foto gelöscht");
+    toast("Letztes Foto gelöscht");
     await refreshImages();
     await refreshMeta();
   };
