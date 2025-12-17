@@ -2,14 +2,12 @@
 # Features:
 # - Upload + sofortige Vorschau (Frontend)
 # - Mehrere Fotos pro Artikel
-# - Hintergrund-KI (OpenAI Vision) -> Titel, Beschreibung, Kategorie, Listenpreis
 # - Rufpreis = 20% vom Listenpreis, IMMER auf ganze € aufrunden
 # - Bei Upload wird KI automatisch neu gestartet (auch bei Foto 2/3/…)
 # - Polling kann auf "genau dieses Foto" warten (filename)
 # - Kein KI-Fallback-Text: bei Fehler -> ki_source="failed"
 # - Live-Check Artikelnummer: /api/check_artnr
 # - Foto löschen: /api/delete_image
-# - CSV Export (inkl. Kategorie)
 # - Admin-Only Budget/Flags (Token geschützt): /api/admin/budget /api/admin/articles
 #
 # Start:
@@ -79,20 +77,19 @@ EXPORT_CSV = EXPORT_DIR / "artikel_export.csv"
 # CSV Export helpers (UTF-8 BOM + schneller Update)
 # ----------------------------
 CSV_FIELDS = [
-    "ArtikelNr",
-    "Menge",
-    "Titel",
-    "Beschreibung",
-    "Preis",          # Rufpreis (ohne . oder ,)
-    "Listenpreis",    # optional, mit Komma (z.B. 199,99) – sonst leer
-    "Lagerort",
-    "Lagerstand",
-    "Uebernehmen",
-    "EinliefererID",
-    "Angeliefert",
-    "Betriebsmittel",
-    "Mitarbeiter",
-]
+        "ArtikelNr",
+        "Menge",
+        "Titel",
+        "Beschreibung",
+        "Preis",
+        "Lagerort",
+        "Lagerstand",
+        "Uebernehmen",
+        "EinliefererID",
+        "Angeliefert",
+        "Betriebsmittel",
+        "Mitarbeiter",
+    ]
 
 CSV_HEADERS = CSV_FIELDS
 
@@ -220,7 +217,6 @@ def _default_meta(artikelnr: str) -> Dict[str, Any]:
         "artikelnr": str(artikelnr),
         "titel": "",
         "beschreibung": "",
-        "kategorie": "",
         "retail_price": 0.0,
         "rufpreis": 0.0,
         "lagerort": "",
@@ -305,20 +301,19 @@ def _usage_fail(err: str) -> None:
 # CSV Export
 # ----------------------------
 CSV_FIELDS = [
-    "ArtikelNr",
-    "Menge",
-    "Preis",
-    "Ladenpreis",
-    "Lagerort",
-    "Lagerstand",
-    "Uebernehmen",
-    "Sortiment",
-    "Kategorie",
-    "EinliefererID",
-    "Angeliefert",
-    "Betriebsmittel",
-    "Mitarbeiter",
-]
+        "ArtikelNr",
+        "Menge",
+        "Titel",
+        "Beschreibung",
+        "Preis",
+        "Lagerort",
+        "Lagerstand",
+        "Uebernehmen",
+        "EinliefererID",
+        "Angeliefert",
+        "Betriebsmittel",
+        "Mitarbeiter",
+    ]
 
 
 def _rebuild_csv_export() -> None:
@@ -339,8 +334,6 @@ def _rebuild_csv_export() -> None:
             "Lagerort": d.get("lagerort", "") or "",
             "Lagerstand": d.get("lagerstand", 1) or 1,
             "Uebernehmen": d.get("uebernehmen", 1) or 1,
-            "Sortiment": d.get("sortiment", "") or "",
-            "Kategorie": d.get("kategorie", "") or "",
             "EinliefererID": d.get("einlieferer_id", d.get("einlieferer", "")) or "",
             "Angeliefert": d.get("angeliefert", "") or "",
             "Betriebsmittel": d.get("betriebsmittel", "") or "",
@@ -415,7 +408,6 @@ def _run_meta_once(artikelnr: str, img_path: Path) -> Tuple[Optional[Dict[str, A
 def _apply_ki_to_meta(mj: Dict[str, Any], meta: Dict[str, Any]) -> None:
     mj["titel"] = _normalize_title(meta.get("title", "")).strip()
     mj["beschreibung"] = meta.get("description", "").strip()
-    mj["kategorie"] = meta.get("category", "").strip()
 
     retail_f = float(meta.get("retail_price", 0.0) or 0.0)
     mj["retail_price"] = round(retail_f, 2)
@@ -671,7 +663,6 @@ def meta(artikelnr: str):
         "artikelnr": artikelnr,
         "titel": mj.get("titel", "") or "",
         "beschreibung": mj.get("beschreibung", "") or "",
-        "kategorie": mj.get("kategorie", "") or "",
         "retail_price": mj.get("retail_price", 0.0) or 0.0,
         "rufpreis": mj.get("rufpreis", 0.0) or 0.0,
         "lagerort": mj.get("lagerort", "") or "",
@@ -694,7 +685,6 @@ def save(data: Dict[str, Any]):
     mj = _load_meta_json(artikelnr)
 
     # Textfelder
-    for k in ["titel", "beschreibung", "lagerort", "einlieferer", "mitarbeiter", "kategorie"]:
         if k in data and data[k] is not None:
             mj[k] = str(data[k])
 
@@ -765,7 +755,6 @@ def describe(artikelnr: str):
             "ok": True,
             "title": mj["titel"],
             "description": mj["beschreibung"],
-            "category": mj.get("kategorie", ""),
             "retail_price": mj["retail_price"],
             "rufpreis": mj["rufpreis"],
             "ki_runtime_ms": runtime_ms,
@@ -820,7 +809,6 @@ def admin_articles(request: Request, category: str = "", only_failed: int = 0):
             continue
 
         nr = str(mj.get("artikelnr", p.stem))
-        cat = (mj.get("kategorie", "") or "").strip()
 
         if category and cat.lower() != category.strip().lower():
             continue
@@ -837,7 +825,6 @@ def admin_articles(request: Request, category: str = "", only_failed: int = 0):
             "artikelnr": nr,
             "titel": mj.get("titel", "") or "",
             "beschreibung": mj.get("beschreibung", "") or "",
-            "kategorie": cat,
             "retail_price": mj.get("retail_price", 0.0) or 0.0,
             "rufpreis": mj.get("rufpreis", 0.0) or 0.0,
             "reviewed": bool(mj.get("reviewed", False)),
