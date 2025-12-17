@@ -10,7 +10,33 @@
 # - Live-Check Artikelnummer: /api/check_artnr
 # - Foto löschen: /api/delete_image
 # - CSV Export (inkl. Kategorie)
-# - Admin-Only Budget/Flags (Token geschützt): /api/admin/budget /api/admin/articles
+# - Admin-Only Budget/Flags (Token gesc
+@app.post("/api/set_cover")
+def set_cover(data: Dict[str, Any]):
+    artikelnr = str(data.get("artikelnr") or data.get("article_id") or data.get("artikelnr", "")).strip()
+    filename = str(data.get("filename") or data.get("name") or data.get("file") or data.get("url") or "").strip()
+
+    if "/" in filename:
+        filename = filename.split("/")[-1]
+    if "?" in filename:
+        filename = filename.split("?", 1)[0]
+
+    if not artikelnr or not filename:
+        return JSONResponse({"ok": False, "error": "artikelnr/filename fehlt"}, status_code=400)
+
+    if not filename.startswith(f"{artikelnr}_") or not filename.lower().endswith(".jpg"):
+        return JSONResponse({"ok": False, "error": "ungültiger Dateiname"}, status_code=400)
+
+    path = RAW_DIR / filename
+    if not path.exists():
+        return JSONResponse({"ok": False, "error": "Datei nicht gefunden"}, status_code=404)
+
+    mj = _load_meta_json(artikelnr)
+    mj["cover"] = filename
+    _save_meta_json(artikelnr, mj)
+    return {"ok": True, "cover": filename}
+
+hützt): /api/admin/budget /api/admin/articles
 #
 # Start:
 #   python -m uvicorn server_full:app --host 0.0.0.0 --port 5050
@@ -431,6 +457,7 @@ def _default_meta(artikelnr: str) -> Dict[str, Any]:
         "ki_runtime_ms": 0,
         "batch_done": False,
         "last_image": "",
+        "cover": "",
         "created_at": int(time.time()),
         "updated_at": int(time.time()),
     }
@@ -892,11 +919,22 @@ async def upload(
 @app.get("/api/images")
 def images(artikelnr: str):
     artikelnr = str(artikelnr).strip()
+    mj = _load_meta_json(artikelnr)
+    cover = (mj.get("cover") or "").strip()
+
     files = []
     for f in sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg")):
         rel = f.relative_to(BASE_DIR)
-        files.append("/static/" + str(rel).replace("\\", "/"))
-    return {"ok": True, "files": files}
+        files.append("/static/" + str(rel).replace("\", "/"))
+
+    # cover-first sorting (if cover set)
+    if cover:
+        def _basename(url: str) -> str:
+            b = url.split("/")[-1]
+            return b.split("?", 1)[0]
+        files.sort(key=lambda u: 0 if _basename(u) == cover else 1)
+
+    return {"ok": True, "files": files, "cover": cover}
 
 
 
@@ -961,6 +999,8 @@ def delete_image(payload: Dict[str, Any]):
     mj = _load_meta_json(artikelnr)
     pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
     mj["last_image"] = pics[-1].name if pics else ""
+    if (mj.get("cover") or "").strip() == filename:
+        mj["cover"] = pics[0].name if pics else ""
     _save_meta_json(artikelnr, mj)
 
     _rebuild_csv_export()
