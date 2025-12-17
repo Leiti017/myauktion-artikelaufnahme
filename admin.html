@@ -266,7 +266,7 @@ function setToken(t){
           <td class="py-2 pr-3">${money(Number(it.retail_price||0))}</td>
           <td class="py-2 pr-3">${money(Number(it.rufpreis||0))}</td>
           <td class="py-2 pr-3">${st.join(" ")}</td>
-          <td class="py-2 pr-3 text-xs opacity-90">${(it.ki_last_error||"")}</td>
+          <td class="py-2 pr-3 text-xs opacity-90">${(it.ki_last_error||"")}</td><td class=\"py-2 pr-3\"><a class=\"underline\" href=\"/?edit=${it.artikelnr}\">Bearbeiten</a></td>
         </tr>
       `;
     }).join("");

@@ -741,6 +741,20 @@
     applyPriceMode();
     loadSortimente();
 
+    // Bearbeiten-Modus: aus Admin/Gesamtartikel kommend
+    try{
+      const qp = new URLSearchParams(window.location.search);
+      const editId = (qp.get("edit") || "").trim();
+      if(editId){
+        fArt.value = editId;
+        updateArtnrHint();
+        refreshImages();
+        refreshMeta();
+        toast("Bearbeiten: " + editId);
+      }
+    }catch(e){}
+
+
     if(btnSetCover){
       btnSetCover.onclick = async ()=>{
         if(!validArtNr()) return alert("Artikelnummer muss mindestens 6-stellig sein.");

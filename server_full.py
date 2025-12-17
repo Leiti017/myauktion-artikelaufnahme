@@ -964,15 +964,17 @@ def delete_last_image(data: Dict[str, Any]):
 
     return {"ok": True, "deleted": target.name}
 
+
 @app.post("/api/delete_image")
 def delete_image(payload: Dict[str, Any]):
     artikelnr = str(payload.get("artikelnr", "")).strip()
     filename = str(payload.get("filename", "") or payload.get("name","") or payload.get("file","") or payload.get("url","")).strip()
+
     # falls URL: nur basename nehmen
     if "/" in filename:
         filename = filename.split("/")[-1]
     if "?" in filename:
-        filename = filename.split("?",1)[0]
+        filename = filename.split("?", 1)[0]
 
     if not artikelnr or not filename:
         return JSONResponse({"ok": False, "error": "artikelnr/filename fehlt"}, status_code=400)
@@ -985,18 +987,38 @@ def delete_image(payload: Dict[str, Any]):
     if not path.exists():
         return JSONResponse({"ok": False, "error": "Datei nicht gefunden"}, status_code=404)
 
+    # RAW löschen
     try:
         path.unlink()
     except Exception as e:
         return JSONResponse({"ok": False, "error": f"löschen fehlgeschlagen: {e}"}, status_code=500)
 
+    # ggf. bearbeitete Version löschen (best-effort)
+    try:
+        stem = path.stem
+        for pf in PROCESSED_DIR.glob(stem + ".*"):
+            try:
+                pf.unlink()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    # meta updaten: last_image + cover korrekt setzen
     mj = _load_meta_json(artikelnr)
     pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
+
     mj["last_image"] = pics[-1].name if pics else ""
+
+    # wenn gelöschtes Bild Titelbild war -> neues Titelbild setzen (erstes verbleibendes, sonst leer)
+    if str(mj.get("cover", "")).strip() == filename:
+        mj["cover"] = pics[0].name if pics else ""
+
     _save_meta_json(artikelnr, mj)
 
     _rebuild_csv_export()
-    return {"ok": True}
+    return {"ok": True, "deleted": filename}
+
 
 
 @app.get("/api/meta")
