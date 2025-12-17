@@ -34,7 +34,6 @@
     .btn{padding:.55rem 1rem;border-radius:999px;font-weight:700;display:inline-flex;align-items:center;gap:.45rem}
     .btn-primary{background:#fff;color:#0f172a;box-shadow:0 8px 18px rgba(0,0,0,.2)}
     .btn-ghost{color:#fff;border:1px solid rgba(255,255,255,.35);background:transparent}
-    .btn-danger{color:#fff;border:1px solid rgba(239,68,68,.85);background:rgba(239,68,68,.22)}
     .input, select{
       width:100%;padding:.55rem .9rem;border-radius:.75rem;background:rgba(255,255,255,.96);
       color:#0f172a;outline:none;border:1px solid transparent;font-size:.9rem
@@ -85,7 +84,7 @@
       <section>
         <div class="flex items-center justify-between mb-2">
           <h2 class="text-lg font-semibold">1. Artikel erfassen</h2>
-          <button id="btn-settings" type="button" class="btn btn-ghost text-xs">⚙️ Einstellungen</button>
+          <button id="btn-settings" class="btn btn-ghost text-xs">⚙️ Einstellungen</button>
         </div>
 
         <!-- ⚙️ EINSTELLUNGEN -->
@@ -104,14 +103,28 @@
                 <option value="65461">65461</option>
               </select>
             </div>
+<div class="setting-row">
+  <label for="sortimentSelect">Sortiment</label>
+  <div style="display:flex; gap:8px; align-items:center;">
+    <select id="sortimentSelect" style="flex:1;"></select>
+    <button type="button" id="sortimentReloadBtn" class="btn">↻</button>
+  </div>
+</div>
 
             <div>
               <label class="block mb-1 text-xs opacity-80">Mitarbeiter</label>
               <select id="s-mitarbeiter" class="input">
                 <option>Jan</option><option>Rene</option><option>Karin</option><option>Katharina</option>
-                <option>Linda</option><option>Jasmin</option><option>Natascha</option><option>Gast1</option><option>Gast2</option><option>Gast3</option>
+                <option>Linda</option><option>Jasmin</option><option>Natascha</option>
               </select>
-            </div>            <div>
+            </div>
+
+            <div>
+              <label class="block mb-1 text-xs opacity-80">Menge</label>
+              <input id="s-menge" type="number" class="input" value="1" min="1">
+            </div>
+
+            <div>
               <label class="block mb-1 text-xs opacity-80">Lagerstand</label>
               <input id="s-lagerstand" type="number" class="input" value="1" min="1">
             </div>
@@ -140,15 +153,11 @@
         <div id="settings-mini" class="text-[11px] text-white/80 mb-3"></div>
 
         <!-- HAUPTMASKE -->
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
           <div>
-            <label class="block mb-1 text-xs opacity-80">Artikelnr. (min. 6-stellig)</label>
+            <label class="block mb-1 text-xs opacity-80">Artikelnummer (mind. 6-stellig)</label>
             <input id="f-artikelnr" type="number" inputmode="numeric" class="input" autocomplete="off" placeholder="z.B. 810233">
             <div id="artnr-hint" class="text-[11px] text-white/80 mt-1"></div>
-          </div>
-          <div>
-            <label class="block mb-1 text-xs opacity-80">Menge</label>
-            <input id="f-menge" type="number" class="input" value="1" min="1">
           </div>
           <div>
             <label class="block mb-1 text-xs opacity-80">Lagerort</label>
@@ -162,13 +171,7 @@
           <span class="text-xs text-white/70 text-center">Tippen, um Foto aufzunehmen / auszuwählen</span>
         </div>
 
-        <!-- (Listenpreis-Button ist rechts beim Preis-System) -->
-
         <div class="img-strip flex gap-2 overflow-x-auto pb-1" id="img-strip"></div>
-
-        <div class="flex justify-end mt-2">
-          <button id="btn-set-cover" type="button" class="btn btn-ghost text-xs hidden">⭐ Als Titelbild setzen</button>
-        </div>
 
         <div class="flex flex-col gap-2 mt-3">
           <button id="btn-photo" class="btn btn-primary text-sm">
@@ -208,25 +211,24 @@
         </div>
 
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
-          <div id="retail-wrap">
-            <label class="block mb-1 text-xs opacity-80">Listenpreis (€)</label>
+          <div>
+            <div class="flex items-center justify-between mb-1">
+              <label class="block text-xs opacity-80">Listenpreis (€)</label>
+              <button id="btn-price-toggle" class="btn btn-ghost text-[11px]" type="button">Preis-System ausschalten</button>
+            </div>
             <input id="f-retail" type="number" class="input">
           </div>
-          <div id="ruf-wrap">
+          <div>
             <label class="block mb-1 text-xs opacity-80">Rufpreis</label>
             <input id="f-ruf" type="number" class="input">
           </div>
         </div>
 
-        <div class="flex justify-end gap-2 mb-3 flex-wrap">
-          <button id="btn-price-toggle" class="btn btn-ghost text-[11px]" type="button">Preis-System ausschalten</button>
-          <button id="btn-toggle-retail" class="btn btn-ghost text-[11px]" type="button">Listenpreis ausblenden</button>
-        </div>
-
         <label class="block mb-1 text-xs opacity-80">System-Log</label>
         <div id="log" class="text-[11px] text-slate-900 bg-white/90 rounded-xl p-2 max-h-40 overflow-y-auto"></div>
 
-              </section>
+        <div class="text-[10px] text-white/70 mt-3">build: LIVE_SETTINGS_PRICE_VISUAL</div>
+      </section>
     </div>
   </main>
 </div>
@@ -235,12 +237,10 @@
   const fArt = document.getElementById('f-artikelnr');
   const artHint = document.getElementById('artnr-hint');
   const fLager = document.getElementById('f-lagerort');
-  const fMenge = document.getElementById('f-menge');
 
   const fFile = document.getElementById('f-file');
   const thumb = document.getElementById('thumb');
   const imgStrip = document.getElementById('img-strip');
-  const btnSetCover = document.getElementById('btn-set-cover');
 
   const fTitle = document.getElementById('f-title');
   const fDesc = document.getElementById('f-desc');
@@ -252,10 +252,6 @@
   const btnSave = document.getElementById('btn-save');
   const btnDescribe = document.getElementById('btn-describe');
   const btnPriceToggle = document.getElementById('btn-price-toggle');
-  const btnToggleRetail = document.getElementById('btn-toggle-retail');
-
-  const retailWrap = document.getElementById('retail-wrap');
-  const rufWrap = document.getElementById('ruf-wrap');
 
   const statusText = document.getElementById('status-text');
   const statusPill = document.getElementById('status-pill');
@@ -263,9 +259,6 @@
 
   const logEl = document.getElementById('log');
   const toastWrap = document.getElementById('toast-wrap');
-
-  let selectedImageUrl = "";
-  let selectedFilename = "";
 
   // ⚙️ Settings
   const SETTINGS_KEY = "MYAUKTION_SETTINGS_V1";
@@ -275,6 +268,7 @@
 
   const sEinl = document.getElementById('s-einlieferer-id');
   const sMit  = document.getElementById('s-mitarbeiter');
+  const sMenge = document.getElementById('s-menge');
   const sLagerstand = document.getElementById('s-lagerstand');
   const sUebernehmen = document.getElementById('s-uebernehmen');
   const sAngeliefert = document.getElementById('s-angeliefert');
@@ -294,7 +288,6 @@
         angeliefert: "",
         betriebsmittel: "",
         price_system_enabled: true
-        ,hide_listprice: false
       }, d || {});
     }catch(e){
       return {einlieferer_id:"22",mitarbeiter:"Jan",menge:1,lagerstand:1,uebernehmen:1,angeliefert:"",betriebsmittel:"",price_system_enabled:true};
@@ -319,13 +312,12 @@
     const s = loadSettings();
     sEinl.value = s.einlieferer_id || "22";
     sMit.value = s.mitarbeiter || "Jan";
+    sMenge.value = String(s.menge ?? 1);
     sLagerstand.value = String(s.lagerstand ?? 1);
     sUebernehmen.value = String(s.uebernehmen ?? 1);
     sAngeliefert.value = s.angeliefert || "";
     sBetriebsmittel.value = s.betriebsmittel || "";
     settingsMini.textContent = "Einstellungen: " + settingsText(s);
-    // Main-Feld Menge übernehmen
-    try{ fMenge.value = String(s.menge ?? 1); }catch(e){}
   }
 
   function readSettingsFromUI(){
@@ -333,7 +325,7 @@
     return {
       einlieferer_id: (sEinl.value||"").trim(),
       mitarbeiter: (sMit.value||"").trim(),
-      menge: parseInt((fMenge?.value)||"1",10) || 1,
+      menge: parseInt(sMenge.value||"1",10) || 1,
       lagerstand: parseInt(sLagerstand.value||"1",10) || 1,
       uebernehmen: parseInt(sUebernehmen.value||"1",10) || 1,
       angeliefert: (sAngeliefert.value||"").trim(),
@@ -351,42 +343,16 @@
   function applyPriceMode(){
     const s = loadSettings();
     const enabled = (s.price_system_enabled !== false);
-    const hideRetail = (s.hide_listprice === true);
-
     if(btnPriceToggle){
       btnPriceToggle.textContent = enabled ? "Preis-System ausschalten" : "Preis-System einschalten";
-      btnPriceToggle.classList.toggle('btn-danger', !enabled);
-      btnPriceToggle.classList.toggle('btn-ghost', enabled);
     }
-    if(btnToggleRetail){
-      // Button nur sinnvoll, wenn Preis-System AN ist
-      btnToggleRetail.classList.toggle("hidden", !enabled);
-      btnToggleRetail.textContent = hideRetail ? "Listenpreis einblenden" : "Listenpreis ausblenden";
-      // rot, wenn Listenpreis gerade AUSGEBLENDET ist
-      btnToggleRetail.classList.toggle('btn-danger', enabled && hideRetail);
-      btnToggleRetail.classList.toggle('btn-ghost', !(enabled && hideRetail));
-    }
-
-    const retailVisible = (enabled && !hideRetail);
-
-    if(retailWrap){
-      retailWrap.classList.toggle("hidden", !retailVisible);
-    }
-    if(rufWrap){
-      rufWrap.classList.toggle("sm:col-span-2", !retailVisible);
-    }
-
-    if(!retailVisible){
-      fRetail.value = "";
-      fRetail.classList.add("price-off");
-    }else{
-      fRetail.classList.remove("price-off");
-    }
-
     if(!enabled){
+      fRetail.value = "";
       fRuf.value = "1";
+      fRetail.classList.add("price-off");
       fRuf.classList.add("price-off");
     }else{
+      fRetail.classList.remove("price-off");
       fRuf.classList.remove("price-off");
     }
   }
@@ -420,53 +386,14 @@
     if(!art) return;
     const res = await fetch('/api/images?artikelnr=' + encodeURIComponent(art));
     const j = await res.json();
-
     imgStrip.innerHTML = '';
-    selectedImageUrl = "";
-    selectedFilename = "";
-
-    const files = (j.files||[]);
-    const cover = (j.cover||"").trim();
-
-    files.forEach((url, idx)=>{
+    (j.files||[]).forEach(url=>{
       const img = document.createElement('img');
       img.src = url;
-
-      // filename aus URL
-      const fname = String(url).split('/').pop();
-
-      // cover markieren (erster in Liste ist ohnehin cover-first, aber zur Sicherheit)
-      const isCover = (fname === cover) || (idx===0 && !cover && files.length);
-
-      img.title = isCover ? "Titelbild" : "Bild";
-
-      img.onclick = ()=>{
-        selectedImageUrl = url;
-        selectedFilename = fname;
-        thumb.innerHTML = `<img src="${url}">`;
-
-        // UI highlight
-        [...imgStrip.querySelectorAll('img')].forEach(el=> el.style.outline = "");
-        img.style.outline = "2px solid rgba(255,255,255,.85)";
-
-        if(btnSetCover){
-          btnSetCover.classList.toggle("hidden", !selectedFilename);
-        }
-      };
-
-      if(isCover){
-        // kleines Badge per outline (visuell leicht)
-        img.style.border = "2px solid rgba(239,68,68,.75)";
-      }
-
+      img.onclick = ()=> thumb.innerHTML = `<img src="${url}">`;
       imgStrip.appendChild(img);
     });
-
-    if(btnSetCover){
-      btnSetCover.classList.add("hidden");
-    }
   }
-
 
   async function refreshMeta(){
     const art = (fArt.value||"").trim();
@@ -528,10 +455,6 @@
   thumb.onclick = ()=> fFile.click();
 
   fArt.addEventListener('input', updateArtnrHint);
-  fMenge.addEventListener('change', ()=>{
-    try{ const s=loadSettings(); s.menge = parseInt((fMenge.value||'1'),10)||1; saveSettings(s); applySettingsToUI(); }catch(e){}
-  });
-
   fArt.addEventListener('blur', async ()=>{
     updateArtnrHint();
     if(!validArtNr()) return;
@@ -626,12 +549,9 @@
     fDesc.value = "";
     fRetail.value = "";
     fRuf.value = "";
-    selectedImageUrl = "";
-    selectedFilename = "";
-    if(btnSetCover) btnSetCover.classList.add("hidden");
-    // Menge auf gespeicherten Default
-    try{ const s = loadSettings(); fMenge.value = String(s.menge ?? 1); }catch(e){}
-    // Settings beibehalten (Defaults bleiben)
+    // Immer zurücksetzen
+    sLagerstand.value = "1";
+    sUebernehmen.value = "1";
     if(typeof applyPriceMode === "function") applyPriceMode();
     statusText.textContent = "Bereit.";
     try{ window.scrollTo({top:0, behavior:"smooth"});}catch(e){}
@@ -645,26 +565,22 @@
     const art = (fArt.value||"").trim();
     const s = loadSettings();
 
-    const mengeVal = parseInt((fMenge.value||"1"),10) || 1;
-
-    // Menge (und Betriebsmittel etc.) als Default speichern, damit es beim nächsten Artikel gleich bleibt
-    try{ s.menge = mengeVal; saveSettings(s); applySettingsToUI(); }catch(e){}
-
     const payload = {
       artikelnr: art,
       lagerort: (fLager.value||"").trim(),
 
       mitarbeiter: s.mitarbeiter,
-      menge: mengeVal,
+      menge: s.menge,
       lagerstand: s.lagerstand,
       uebernehmen: s.uebernehmen,
       einlieferer_id: s.einlieferer_id,
       angeliefert: s.angeliefert,
       betriebsmittel: s.betriebsmittel,
+      sortiment: (document.getElementById("sortimentSelect")?.value || ""),
       einlieferer: s.einlieferer_id,
 
       price_system_enabled: (s.price_system_enabled !== false),
-      retail_price: (s.price_system_enabled === false || s.hide_listprice === true) ? "" : (fRetail.value||""),
+      retail_price: (s.price_system_enabled === false) ? "" : (fRetail.value||""),
       rufpreis: (s.price_system_enabled === false) ? 1 : (fRuf.value||0),
 
       titel: (fTitle.value||"").trim(),
@@ -694,27 +610,6 @@
     applySettingsToUI();
     applyPriceMode();
 
-    if(btnSetCover){
-      btnSetCover.onclick = async ()=>{
-        if(!validArtNr()) return alert("Artikelnummer muss mindestens 6-stellig sein.");
-        if(!selectedFilename) return toast("Bitte ein Bild auswählen");
-        const art = (fArt.value||"").trim();
-        const res = await fetch('/api/set_cover', {
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({artikelnr: art, filename: selectedFilename})
-        });
-        const j = await res.json();
-        if(!res.ok || !j.ok){
-          alert("Titelbild Fehler: " + (j.error || res.status));
-          return;
-        }
-        toast("Titelbild gesetzt");
-        await refreshImages();
-      };
-    }
-
-
     btnSettings.onclick = toggleSettings;
 
     btnSettingsSave.onclick = ()=>{
@@ -733,17 +628,6 @@
       applySettingsToUI();
       applyPriceMode();
     };
-
-
-    if(btnToggleRetail){
-      btnToggleRetail.onclick = ()=>{
-        const s = loadSettings();
-        s.hide_listprice = (s.hide_listprice === true) ? false : true;
-        saveSettings(s);
-        applySettingsToUI();
-        applyPriceMode();
-      };
-    }
 
     // Wenn noch nie gesetzt: einmal öffnen
     const s0 = loadSettings();

@@ -52,10 +52,12 @@
     <section class="glass rounded-3xl p-5 shadow-xl mb-5">
       <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
         <div>
-          <div class="text-lg font-bold">CSV Export</div>
-          <div class="text-xs opacity-80">Exportiere deine Artikel als Excel-kompatible CSV (mit Von/Bis Bereich).</div>
+          <div class="text-lg font-bold">KI Budget (geschätzt)</div>
+          <div class="text-xs opacity-80">Schätzung basiert auf erfolgreichen KI-Aufrufen (fixer €/Call). OpenAI-Hardlimit steuerst du im Dashboard.</div>
         </div>
-        <div class="glass rounded-2xl p-3 mb-3">
+        <div class="flex gap-2">
+          
+<div class="glass rounded-2xl p-3 mb-3">
   <div class="text-sm font-semibold mb-2">CSV Export</div>
   <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
     <div>
@@ -71,6 +73,7 @@
     </div>
   </div>
   <div class="text-[11px] opacity-70 mt-2">Leer lassen = kompletter Export.</div>
+</div>
 </div>
       </div>
     </section>
@@ -372,6 +375,57 @@ function setToken(t){
 
 
   init();
+</script>
+<section class="card" id="sortimentAdminCard">
+  <h2>Sortiment anlegen</h2>
+  <p>Hier kannst du Sortimente definieren, die in den Einstellungen auswählbar sind. Format pro Zeile: <code>(ID) Name</code> z.B. <code>(22) Tiernahrung 45</code></p>
+  <textarea id="sortimentText" style="width:100%; min-height:140px;"></textarea>
+  <div style="display:flex; gap:10px; margin-top:10px;">
+    <button type="button" class="btn" id="sortimentLoadBtn">Laden</button>
+    <button type="button" class="btn btn-primary" id="sortimentSaveBtn">Speichern</button>
+    <span id="sortimentStatus" style="align-self:center;"></span>
+  </div>
+</section>
+<script>
+async function adminLoadSortiments() {
+  const status = document.getElementById('sortimentStatus');
+  try {
+    const res = await fetch('/api/admin/sortiments' + (window.ADMIN_TOKEN ? ('?token=' + encodeURIComponent(window.ADMIN_TOKEN)) : ''));
+    const js = await res.json();
+    if (!js.ok) throw new Error(js.error || 'load failed');
+    const lines = (js.items || []).map(it => `(${it.id}) ${it.name}`);
+    document.getElementById('sortimentText').value = lines.join('\n');
+    if (status) status.textContent = 'geladen';
+  } catch (e) {
+    if (status) status.textContent = 'Fehler beim Laden';
+    console.warn(e);
+  }
+}
+async function adminSaveSortiments() {
+  const status = document.getElementById('sortimentStatus');
+  try {
+    const raw = document.getElementById('sortimentText').value || '';
+    const items = [];
+    raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean).forEach(line => {
+      const m = line.match(/^\(([^)]+)\)\s*(.+)$/);
+      if (m) items.push({id: m[1].trim(), name: m[2].trim()});
+    });
+    const url = '/api/admin/sortiments' + (window.ADMIN_TOKEN ? ('?token=' + encodeURIComponent(window.ADMIN_TOKEN)) : '');
+    const res = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({items})});
+    const js = await res.json();
+    if (!js.ok) throw new Error(js.error || 'save failed');
+    if (status) status.textContent = 'gespeichert';
+  } catch (e) {
+    if (status) status.textContent = 'Fehler beim Speichern';
+    console.warn(e);
+  }
+}
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('sortimentLoadBtn')?.addEventListener('click', adminLoadSortiments);
+  document.getElementById('sortimentSaveBtn')?.addEventListener('click', adminSaveSortiments);
+  // auto-load once
+  adminLoadSortiments();
+});
 </script>
 </body>
 </html>
