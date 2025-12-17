@@ -35,7 +35,7 @@ def _normalize_title(title: str) -> str:
 
 from pathlib import Path
 from PIL import Image, ImageOps
-import io, json, time, csv, math, os
+import io, json, time, csv, math, os, datetime
 import re
 from typing import Any, Dict, Optional, Tuple
 
@@ -87,9 +87,9 @@ CSV_FIELDS = [
     "Ladenpreis",
     "Lagerort",
     "Lagerstand",
-    "uebernehmen",
+    "Uebernehmen",
     "Sortiment",
-    "angeliefert",
+    "Angeliefert",
     "Betriebsmittel",
     "Mitarbeiter",
 ]
@@ -102,17 +102,6 @@ def _format_rufpreis(val: Any) -> str:
     except Exception:
         f = 0.0
     return str(int(round(f)))
-
-
-def _format_listenpreis(val: Any) -> str:
-    """Listenpreis/Ladenpreis als Zahl mit Komma und 2 Dezimalen (z.B. 199,99)."""
-    try:
-        f = float(str(val or 0).replace(",", "."))
-    except Exception:
-        f = 0.0
-    s = f"{f:.2f}"
-    return s.replace(".", ",")
-
 
 def _ensure_export_csv_exists() -> None:
     if not EXPORT_CSV.exists():
@@ -143,25 +132,45 @@ def _update_csv_row_for_art(artikelnr: str, meta: Dict[str, Any]) -> None:
         rows = [CSV_HEADERS]
     else:
         rows[0] = CSV_HEADERS
-    # Build new row
+
     art = str(artikelnr)
-    bezeichnung = str(meta.get("titel") or meta.get("bezeichnung") or "")
+
+    bezeichnung = str(meta.get("titel") or "")
     beschr = str(meta.get("beschreibung") or "")
     menge = int(meta.get("menge") or 1)
     preis = _format_rufpreis(meta.get("rufpreis", 0))
-    ladenpreis = _format_listenpreis(meta.get("retail_price", meta.get("listenpreis", 0)))
+    # Listenpreis (= Ladenpreis) im Export mit Komma
+    try:
+        lp = float(str(meta.get("retail_price") or 0).replace(",", "."))
+    except Exception:
+        lp = 0.0
+    ladenpreis = (f"{lp:.2f}".replace(".", ",") if lp else "")
+
     lagerort = str(meta.get("lagerort") or "")
     lagerstand = int(meta.get("lagerstand") or 1)
     uebernehmen = int(meta.get("uebernehmen") or 1)
     sortiment = str(meta.get("sortiment") or "")
-    angeliefert = str(meta.get("angeliefert") or "")
-    betriebsmittel = str(meta.get("betriebsmittel") or "")
-    mitarbeiter = str(meta.get("mitarbeiter") or "")
+    angel = str(meta.get("angeliefert") or "")
+    betr = str(meta.get("betriebsmittel") or "")
+    mitarb = str(meta.get("mitarbeiter") or "")
 
-    new_row = [art, bezeichnung, beschr, str(menge), preis, ladenpreis, lagerort, str(lagerstand), str(uebernehmen), sortiment, angeliefert, betriebsmittel, mitarbeiter]
+    new_row = [
+        art,
+        bezeichnung,
+        beschr,
+        str(menge),
+        preis,
+        ladenpreis,
+        lagerort,
+        str(lagerstand),
+        str(uebernehmen),
+        sortiment,
+        angel,
+        betr,
+        mitarb,
+    ]
 
     # Replace or append
-
     out_rows = [rows[0]]
     replaced = False
     for r in rows[1:]:
@@ -179,40 +188,8 @@ def _update_csv_row_for_art(artikelnr: str, meta: Dict[str, Any]) -> None:
     for r in out_rows:
         w.writerow(r)
     EXPORT_CSV.write_bytes(("\ufeff" + bio.getvalue()).encode("utf-8"))
+
 USAGE_JSON = EXPORT_DIR / "ki_usage.json"
-
-SORTIMENTS_JSON = EXPORT_DIR / "sortiments.json"
-
-def _load_sortiments() -> list[dict]:
-    if SORTIMENTS_JSON.exists():
-        try:
-            data = json.loads(SORTIMENTS_JSON.read_text("utf-8"))
-            if isinstance(data, list):
-                # normalize
-                out = []
-                for x in data:
-                    if isinstance(x, dict) and "id" in x and "name" in x:
-                        out.append({"id": str(x["id"]), "name": str(x["name"])})
-                return out
-        except Exception:
-            pass
-    # default empty list
-    return []
-
-def _save_sortiments(items: list[dict]) -> None:
-    # keep unique ids
-    seen = set()
-    out = []
-    for it in items:
-        sid = str(it.get("id","")).strip()
-        name = str(it.get("name","")).strip()
-        if not sid or not name or sid in seen:
-            continue
-        seen.add(sid)
-        out.append({"id": sid, "name": name})
-    SORTIMENTS_JSON.write_text(json.dumps(out, ensure_ascii=False, indent=2), "utf-8")
-
-
 
 # Admin-Schutz (frei wählbar, NICHT OpenAI-Key)
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "").strip()  # leer => Admin offen (nur für Tests)
@@ -435,6 +412,7 @@ def _default_meta(artikelnr: str) -> Dict[str, Any]:
         "einlieferer": "",
         "mitarbeiter": "",
         "lagerstand": 1,
+        "sortiment": "",
         "reviewed": False,
         "ki_source": "",          # pending | realtime | failed | ""
         "ki_last_error": "",
@@ -529,20 +507,19 @@ def _rebuild_csv_export() -> None:
 
         nr = str(d.get("artikelnr") or meta_file.stem)
         rows.append({
-        "ArtikelNr": nr,
-        "Bezeichnung": d.get("titel", d.get("bezeichnung", "")) or "",
-        "Beschreibung": d.get("beschreibung", "") or "",
-        "Menge": d.get("menge", 1) or 1,
-        "Preis": _format_rufpreis(d.get("rufpreis", 0.0) or 0.0),
-        "Ladenpreis": _format_listenpreis(d.get("retail_price", d.get("listenpreis", 0.0)) or 0.0),
-        "Lagerort": d.get("lagerort", "") or "",
-        "Lagerstand": d.get("lagerstand", 1) or 1,
-        "uebernehmen": d.get("uebernehmen", 1) or 1,
-            "Sortiment": d.get("sortiment", "") or "",
-        "angeliefert": d.get("angeliefert", "") or "",
-        "Betriebsmittel": d.get("betriebsmittel", "") or "",
-        "Mitarbeiter": d.get("mitarbeiter", "") or "",
-    })
+            "ArtikelNr": nr,
+            "Menge": int(d.get("menge", 1) or 1),
+            "Titel": str(d.get("titel", "") or ""),
+            "Beschreibung": str(d.get("beschreibung", "") or ""),
+            "Preis": _format_rufpreis(d.get("rufpreis", 0.0) or 0.0),
+            "Lagerort": str(d.get("lagerort", "") or ""),
+            "Lagerstand": int(d.get("lagerstand", 1) or 1),
+            "Uebernehmen": int(d.get("uebernehmen", 1) or 1),
+            "EinliefererID": str(d.get("einlieferer_id", d.get("einlieferer", "")) or ""),
+            "Angeliefert": str(d.get("angeliefert", "") or ""),
+            "Betriebsmittel": str(d.get("betriebsmittel", "") or ""),
+            "Mitarbeiter": str(d.get("mitarbeiter", "") or ""),
+        })
 
     def _sort_key(r: dict):
         try:
@@ -647,6 +624,77 @@ def _run_meta_background(artikelnr: str, img_path: Path) -> None:
     print(f"[BG-KI] Fertig für Artikel {artikelnr} – ki_ok={ok}")
 
 
+
+
+# ----------------------------
+# Sortimente (persistent, Admin verwaltbar)
+# ----------------------------
+SORTIMENTE_JSON = EXPORT_DIR / "sortimente.json"
+
+def _default_sortimente() -> list[str]:
+    # Beispiele (kannst du im Admin ändern)
+    return ["(22) Tiernahrung 45"]
+
+def _load_sortimente() -> list[str]:
+    if SORTIMENTE_JSON.exists():
+        try:
+            data = json.loads(SORTIMENTE_JSON.read_text("utf-8"))
+            if isinstance(data, list):
+                return [str(x).strip() for x in data if str(x).strip()]
+        except Exception:
+            pass
+    return _default_sortimente()
+
+def _save_sortimente(items: list[str]) -> None:
+    cleaned = []
+    for x in items:
+        s = str(x).strip()
+        if not s:
+            continue
+        if s not in cleaned:
+            cleaned.append(s)
+    SORTIMENTE_JSON.write_text(json.dumps(cleaned, ensure_ascii=False, indent=2), "utf-8")
+
+
+# ----------------------------
+# Artikel-Liste (Gesamtartikel – nach Datum sortiert)
+# ----------------------------
+def _list_articles() -> list[dict]:
+    items = []
+    for p in RAW_DIR.glob("*.json"):
+        try:
+            mj = json.loads(p.read_text("utf-8"))
+        except Exception:
+            continue
+        nr = str(mj.get("artikelnr", p.stem))
+        created = int(mj.get("created_at", 0) or 0)
+        updated = int(mj.get("updated_at", 0) or 0)
+
+        pics = sorted(RAW_DIR.glob(f"{nr}_*.jpg"))
+        img_url = ""
+        if pics:
+            rel = pics[-1].relative_to(BASE_DIR)
+            img_url = "/static/" + str(rel).replace("\\", "/")
+
+        items.append({
+            "artikelnr": nr,
+            "titel": mj.get("titel", "") or "",
+            "beschreibung": mj.get("beschreibung", "") or "",
+            "sortiment": (mj.get("sortiment", "") or "").strip(),
+            "lagerort": mj.get("lagerort", "") or "",
+            "menge": int(mj.get("menge", 1) or 1),
+            "rufpreis": mj.get("rufpreis", 0.0) or 0.0,
+            "retail_price": mj.get("retail_price", 0.0) or 0.0,
+            "mitarbeiter": mj.get("mitarbeiter", "") or "",
+            "angeliefert": mj.get("angeliefert", "") or "",
+            "created_at": created,
+            "updated_at": updated,
+            "image": img_url,
+        })
+    # neueste zuerst
+    items.sort(key=lambda x: int(x.get("created_at", 0) or 0), reverse=True)
+    return items
+
 # ----------------------------
 # Routes
 # ----------------------------
@@ -660,15 +708,49 @@ def admin_root():
     return FileResponse(str(BASE_DIR / "admin.html"))
 
 
+@app.get("/articles")
+def articles_page():
+    return FileResponse(str(BASE_DIR / "articles.html"))
+
+
 @app.get("/api/health")
 def health():
     return {"ok": True}
 
 
-@app.get("/api/sortiments")
-def api_sortiments():
-    """Liste der auswählbaren Sortimente (vom Admin gepflegt)."""
-    return {"ok": True, "items": _load_sortiments()}
+@app.get("/api/sortimente")
+def sortimente_public():
+    return {"ok": True, "items": _load_sortimente()}
+
+
+@app.get("/api/articles")
+def articles_api(date_from: str | None = None, date_to: str | None = None):
+    """
+    Gesamtartikel (neueste zuerst).
+    Optional:
+      /api/articles?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD
+    """
+    items = _list_articles()
+
+    def _to_ts(s: str, end: bool = False) -> int:
+        try:
+            dt = datetime.datetime.strptime(s, "%Y-%m-%d")
+            if end:
+                dt = dt + datetime.timedelta(days=1) - datetime.timedelta(seconds=1)
+            return int(dt.replace(tzinfo=datetime.timezone.utc).timestamp())
+        except Exception:
+            return 0
+
+    if date_from:
+        tsf = _to_ts(date_from, end=False)
+        if tsf:
+            items = [x for x in items if int(x.get("created_at", 0) or 0) >= tsf]
+    if date_to:
+        tst = _to_ts(date_to, end=True)
+        if tst:
+            items = [x for x in items if int(x.get("created_at", 0) or 0) <= tst]
+
+    return {"ok": True, "items": items}
 
 
 @app.get("/api/export.csv")
@@ -709,19 +791,19 @@ def export_csv(from_nr: str | None = None, to_nr: str | None = None):
             continue
         meta = _load_meta_json(art)
         rows.append([
-    art,
-    str(meta.get("titel") or ""),
-    str(meta.get("beschreibung") or ""),
-    str(int(meta.get("menge") or 1)),
-    _format_rufpreis(meta.get("rufpreis", 0)),
-    _format_listenpreis(meta.get("retail_price", meta.get("listenpreis", 0))),
-    str(meta.get("lagerort") or ""),
-    str(int(meta.get("lagerstand") or 1)),
-    str(int(meta.get("uebernehmen") or 1)),
-    str(meta.get("angeliefert") or ""),
-    str(meta.get("betriebsmittel") or ""),
-    str(meta.get("mitarbeiter") or ""),
-])
+            art,
+            str(int(meta.get("menge") or 1)),
+            str(meta.get("titel") or ""),
+            str(meta.get("beschreibung") or ""),
+            _format_rufpreis(meta.get("rufpreis", 0)),
+            str(meta.get("lagerort") or ""),
+            str(int(meta.get("lagerstand") or 1)),
+            str(int(meta.get("uebernehmen") or 1)),
+            str(meta.get("einlieferer_id") or meta.get("einlieferer") or ""),
+            str(meta.get("angeliefert") or ""),
+            str(meta.get("betriebsmittel") or ""),
+            str(meta.get("mitarbeiter") or ""),
+        ])
 
     bio = io.StringIO()
     w = csv.writer(bio, delimiter=";", quotechar='"', quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
@@ -877,9 +959,9 @@ def meta(artikelnr: str):
         "retail_price": mj.get("retail_price", 0.0) or 0.0,
         "rufpreis": mj.get("rufpreis", 0.0) or 0.0,
         "lagerort": mj.get("lagerort", "") or "",
+        "sortiment": mj.get("sortiment", "") or "",
         "einlieferer": mj.get("einlieferer", "") or "",
         "mitarbeiter": mj.get("mitarbeiter", "") or "",
-        "sortiment": mj.get("sortiment", "") or "",
         "reviewed": bool(mj.get("reviewed", False)),
         "ki_source": mj.get("ki_source", "") or "",
         "ki_last_error": mj.get("ki_last_error", "") or "",
@@ -897,7 +979,7 @@ def save(data: Dict[str, Any]):
     mj = _load_meta_json(artikelnr)
 
     # Textfelder
-    for k in ["titel", "beschreibung", "lagerort", "einlieferer", "mitarbeiter", "kategorie"]:
+    for k in ["titel", "beschreibung", "lagerort", "einlieferer", "mitarbeiter", "kategorie", "sortiment"]:
         if k in data and data[k] is not None:
             mj[k] = str(data[k])
 
@@ -908,7 +990,6 @@ def save(data: Dict[str, Any]):
     if "einlieferer_id" in data: mj["einlieferer_id"] = str(data.get("einlieferer_id") or "")
     if "angeliefert" in data: mj["angeliefert"] = str(data.get("angeliefert") or "")
     if "betriebsmittel" in data: mj["betriebsmittel"] = str(data.get("betriebsmittel") or "")
-    if "sortiment" in data: mj["sortiment"] = str(data.get("sortiment") or "")
     if "mitarbeiter" in data: mj["mitarbeiter"] = str(data.get("mitarbeiter") or "")
 
     # Preise (falls manuell angepasst)
@@ -995,24 +1076,56 @@ def describe(artikelnr: str):
 # Admin API (Token geschützt)
 # ----------------------------
 
-@app.get("/api/admin/sortiments")
-def admin_sortiments_get(request: Request):
-    guard = _admin_guard(request)
-    if guard:
-        return guard
-    return {"ok": True, "items": _load_sortiments()}
 
-@app.post("/api/admin/sortiments")
-def admin_sortiments_post(request: Request, payload: Dict[str, Any]):
+@app.get("/api/admin/sortimente")
+def admin_sortimente(request: Request):
     guard = _admin_guard(request)
     if guard:
         return guard
-    # payload: {"items":[{"id":"22","name":"Tiernahrung 45"}, ...]}
-    items = payload.get("items", [])
-    if not isinstance(items, list):
-        return JSONResponse({"ok": False, "error": "items muss eine Liste sein"}, status_code=400)
-    _save_sortiments(items)
-    return {"ok": True, "items": _load_sortiments()}
+    return {"ok": True, "items": _load_sortimente()}
+
+
+@app.post("/api/admin/sortimente/add")
+def admin_sortimente_add(request: Request, data: Dict[str, Any]):
+    guard = _admin_guard(request)
+    if guard:
+        return guard
+    name = str(data.get("name", "") or "").strip()
+    if not name:
+        return JSONResponse({"ok": False, "error": "name fehlt"}, status_code=400)
+    items = _load_sortimente()
+    if name not in items:
+        items.append(name)
+        _save_sortimente(items)
+    return {"ok": True, "items": _load_sortimente()}
+
+
+@app.post("/api/admin/sortimente/rename")
+def admin_sortimente_rename(request: Request, data: Dict[str, Any]):
+    guard = _admin_guard(request)
+    if guard:
+        return guard
+    old = str(data.get("old", "") or "").strip()
+    new = str(data.get("new", "") or "").strip()
+    if not old or not new:
+        return JSONResponse({"ok": False, "error": "old/new fehlt"}, status_code=400)
+    items = _load_sortimente()
+    items = [new if x == old else x for x in items]
+    _save_sortimente(items)
+    return {"ok": True, "items": _load_sortimente()}
+
+
+@app.post("/api/admin/sortimente/delete")
+def admin_sortimente_delete(request: Request, data: Dict[str, Any]):
+    guard = _admin_guard(request)
+    if guard:
+        return guard
+    name = str(data.get("name", "") or "").strip()
+    if not name:
+        return JSONResponse({"ok": False, "error": "name fehlt"}, status_code=400)
+    items = [x for x in _load_sortimente() if x != name]
+    _save_sortimente(items)
+    return {"ok": True, "items": _load_sortimente()}
 
 @app.get("/api/admin/budget")
 def admin_budget(request: Request):
@@ -1039,7 +1152,7 @@ def admin_budget(request: Request):
 
 
 @app.get("/api/admin/articles")
-def admin_articles(request: Request, category: str = "", only_failed: int = 0):
+def admin_articles(request: Request, sortiment: str = "", only_failed: int = 0):
     guard = _admin_guard(request)
     if guard:
         return guard
@@ -1053,8 +1166,9 @@ def admin_articles(request: Request, category: str = "", only_failed: int = 0):
 
         nr = str(mj.get("artikelnr", p.stem))
         cat = (mj.get("kategorie", "") or "").strip()
+        sorti = (mj.get("sortiment", "") or "").strip()
 
-        if category and cat.lower() != category.strip().lower():
+        if sortiment and sorti.lower() != sortiment.strip().lower():
             continue
         if only_failed and (mj.get("ki_source") != "failed"):
             continue
@@ -1070,6 +1184,7 @@ def admin_articles(request: Request, category: str = "", only_failed: int = 0):
             "titel": mj.get("titel", "") or "",
             "beschreibung": mj.get("beschreibung", "") or "",
             "kategorie": cat,
+            "sortiment": sorti,
             "retail_price": mj.get("retail_price", 0.0) or 0.0,
             "rufpreis": mj.get("rufpreis", 0.0) or 0.0,
             "reviewed": bool(mj.get("reviewed", False)),

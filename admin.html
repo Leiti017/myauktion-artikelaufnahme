@@ -52,12 +52,10 @@
     <section class="glass rounded-3xl p-5 shadow-xl mb-5">
       <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
         <div>
-          <div class="text-lg font-bold">KI Budget (geschätzt)</div>
-          <div class="text-xs opacity-80">Schätzung basiert auf erfolgreichen KI-Aufrufen (fixer €/Call). OpenAI-Hardlimit steuerst du im Dashboard.</div>
+          <div class="text-lg font-bold">CSV Export</div>
+          <div class="text-xs opacity-80">Exportiere deine Artikel als Excel-kompatible CSV (mit Von/Bis Bereich).</div>
         </div>
-        <div class="flex gap-2">
-          
-<div class="glass rounded-2xl p-3 mb-3">
+        <div class="glass rounded-2xl p-3 mb-3">
   <div class="text-sm font-semibold mb-2">CSV Export</div>
   <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
     <div>
@@ -74,10 +72,23 @@
   </div>
   <div class="text-[11px] opacity-70 mt-2">Leer lassen = kompletter Export.</div>
 </div>
-</div>
       </div>
     </section>
 
+
+    <section class="glass rounded-3xl p-5 shadow-xl mb-5">
+      <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+        <div>
+          <div class="text-lg font-bold">Sortiment verwalten</div>
+          <div class="text-xs opacity-80">Anlegen / umbennen / löschen – bleibt gespeichert und ist in den Einstellungen auswählbar.</div>
+        </div>
+        <div class="flex gap-2 w-full md:w-auto">
+          <input id="sort-add" class="input" placeholder="z.B. (22) Tiernahrung 45">
+          <button id="btn-sort-add" class="btn btn-primary" type="button">Hinzufügen</button>
+        </div>
+      </div>
+      <div id="sort-list" class="mt-3"></div>
+    </section>
     <section class="glass rounded-3xl p-5 shadow-xl">
       <div class="flex flex-col md:flex-row md:items-end md:justify-between gap-3">
         <div>
@@ -87,12 +98,9 @@
 
         <div class="grid grid-cols-1 md:grid-cols-3 gap-2 w-full md:w-auto">
           <div>
-            <label class="text-xs opacity-80">Kategorie</label>
-            <select id="f-cat" class="input">
+            <label class="text-xs opacity-80">Sortiment</label>
+            <select id="f-sort" class="input">
               <option value="">Alle</option>
-              <option>Parfum</option><option>Kosmetik</option><option>Werkzeug</option><option>Elektronik</option>
-              <option>Haushalt</option><option>Kleidung</option><option>Schmuck/Uhren</option><option>Spielzeug</option>
-              <option>Bücher/Medien</option><option>Sonstiges</option>
             </select>
           </div>
           <div>
@@ -115,7 +123,7 @@
             <tr>
               <th class="py-2 pr-3">Bild</th>
               <th class="py-2 pr-3">ArtikelNr</th>
-              <th class="py-2 pr-3">Kategorie</th>
+              <th class="py-2 pr-3">Sortiment</th>
               <th class="py-2 pr-3">Bezeichnung</th>
               <th class="py-2 pr-3">Listenpreis</th>
               <th class="py-2 pr-3">Rufpreis</th>
@@ -200,7 +208,7 @@
   let budgetUnlocked = false;
 
   const rowsEl = document.getElementById('rows');
-  const fCat = document.getElementById('f-cat');
+  const fSort = document.getElementById('f-sort');
   const fFailed = document.getElementById('f-failed');
   const fQ = document.getElementById('f-q');
 
@@ -253,7 +261,7 @@ function setToken(t){
         <tr class="border-t border-white/15">
           <td class="py-2 pr-3">${img}</td>
           <td class="py-2 pr-3 font-bold">${it.artikelnr}</td>
-          <td class="py-2 pr-3">${it.kategorie || ""}</td>
+          <td class="py-2 pr-3">${it.sortiment || ""}</td>
           <td class="py-2 pr-3">${(it.titel||"").replaceAll("<","&lt;")}</td>
           <td class="py-2 pr-3">${money(Number(it.retail_price||0))}</td>
           <td class="py-2 pr-3">${money(Number(it.rufpreis||0))}</td>
@@ -274,11 +282,82 @@ function setToken(t){
     bLastErr.textContent = budget.last_error || "—";
   }
 
+
+  async function loadSortimente(){
+    try{
+      const js = await api("/api/admin/sortimente");
+      const items = (js.items||[]);
+      if(fSort){
+        const cur = (fSort.value || "").trim();
+        fSort.innerHTML = '<option value="">Alle</option>' + items.map(x=>{
+          const v = String(x).replaceAll('"','&quot;');
+          return `<option value="${v}">${v}</option>`;
+        }).join('');
+        if(cur) fSort.value = cur;
+      }
+      // auch Management Liste
+      renderSortimente(items);
+    }catch(e){}
+  }
+
+  function renderSortimente(items){
+    const box = document.getElementById('sort-list');
+    if(!box) return;
+    box.innerHTML = (items||[]).map(n=>{
+      const safe = String(n).replaceAll("<","&lt;");
+      return `
+        <div class="flex items-center justify-between gap-2 py-1 border-b border-white/10">
+          <div class="text-sm">${safe}</div>
+          <div class="flex gap-2">
+            <button class="btn btn-primary" style="padding:.25rem .7rem;font-size:.75rem" onclick="renameSortiment('${safe.replaceAll("'","&#39;")}')">Umbennen</button>
+            <button class="btn btn-primary" style="padding:.25rem .7rem;font-size:.75rem" onclick="deleteSortiment('${safe.replaceAll("'","&#39;")}')">Löschen</button>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  async function addSortiment(){
+    const inp = document.getElementById('sort-add');
+    const name = (inp?.value || "").trim();
+    if(!name) return;
+    await apiPost("/api/admin/sortimente/add", {name});
+    inp.value = "";
+    await loadSortimente();
+    await refresh();
+  }
+
+  async function renameSortiment(oldName){
+    const nn = prompt("Neuer Name für Sortiment:", oldName);
+    if(!nn) return;
+    await apiPost("/api/admin/sortimente/rename", {old: oldName, new: nn});
+    await loadSortimente();
+    await refresh();
+  }
+
+  async function deleteSortiment(name){
+    if(!confirm("Sortiment wirklich löschen?\n\n" + name)) return;
+    await apiPost("/api/admin/sortimente/delete", {name});
+    await loadSortimente();
+    await refresh();
+  }
+
+  async function apiPost(path, data){
+    const t = getToken();
+    const res = await fetch(path, {
+      method:'POST',
+      headers: { 'Content-Type':'application/json', ...(t ? {'X-Admin-Token': t} : {}) },
+      body: JSON.stringify(data||{})
+    });
+    if(res.status === 401) throw new Error("unauthorized");
+    return res.json();
+  }
+
   async function refresh(){
-    const cat = (fCat.value || "").trim();
+    const sortiment = (fSort.value || "").trim();
     const only_failed = fFailed.value || "0";
     const qs = new URLSearchParams();
-    if(cat) qs.set("category", cat);
+    if(sortiment) qs.set("sortiment", sortiment);
     if(only_failed === "1") qs.set("only_failed", "1");
 
     const arts = await api("/api/admin/articles?" + qs.toString());
@@ -311,6 +390,7 @@ function setToken(t){
         budgetContent.classList.add("hidden");
       }
 
+      await loadSortimente();
       await refresh();
     }catch(e){
       locked.classList.remove("hidden");
@@ -318,6 +398,9 @@ function setToken(t){
     }
   }
 
+
+  const btnSortAdd = document.getElementById('btn-sort-add');
+  if(btnSortAdd){ btnSortAdd.onclick = addSortiment; }
 
   btnUnlock.onclick = async ()=>{
     const t = (tokenInp.value || "").trim();
@@ -342,12 +425,13 @@ function setToken(t){
       budgetUnlocked = true;
       budgetLocked.classList.add("hidden");
       budgetContent.classList.remove("hidden");
+      await loadSortimente();
       await refresh();
     };
   }
 
 
-  fCat.onchange = refresh;
+  fSort.onchange = refresh;
   fFailed.onchange = refresh;
   fQ.oninput = ()=> refresh();
 
@@ -375,57 +459,6 @@ function setToken(t){
 
 
   init();
-</script>
-<section class="card" id="sortimentAdminCard">
-  <h2>Sortiment anlegen</h2>
-  <p>Hier kannst du Sortimente definieren, die in den Einstellungen auswählbar sind. Format pro Zeile: <code>(ID) Name</code> z.B. <code>(22) Tiernahrung 45</code></p>
-  <textarea id="sortimentText" style="width:100%; min-height:140px;"></textarea>
-  <div style="display:flex; gap:10px; margin-top:10px;">
-    <button type="button" class="btn" id="sortimentLoadBtn">Laden</button>
-    <button type="button" class="btn btn-primary" id="sortimentSaveBtn">Speichern</button>
-    <span id="sortimentStatus" style="align-self:center;"></span>
-  </div>
-</section>
-<script>
-async function adminLoadSortiments() {
-  const status = document.getElementById('sortimentStatus');
-  try {
-    const res = await fetch('/api/admin/sortiments' + (window.ADMIN_TOKEN ? ('?token=' + encodeURIComponent(window.ADMIN_TOKEN)) : ''));
-    const js = await res.json();
-    if (!js.ok) throw new Error(js.error || 'load failed');
-    const lines = (js.items || []).map(it => `(${it.id}) ${it.name}`);
-    document.getElementById('sortimentText').value = lines.join('\n');
-    if (status) status.textContent = 'geladen';
-  } catch (e) {
-    if (status) status.textContent = 'Fehler beim Laden';
-    console.warn(e);
-  }
-}
-async function adminSaveSortiments() {
-  const status = document.getElementById('sortimentStatus');
-  try {
-    const raw = document.getElementById('sortimentText').value || '';
-    const items = [];
-    raw.split(/\r?\n/).map(l => l.trim()).filter(Boolean).forEach(line => {
-      const m = line.match(/^\(([^)]+)\)\s*(.+)$/);
-      if (m) items.push({id: m[1].trim(), name: m[2].trim()});
-    });
-    const url = '/api/admin/sortiments' + (window.ADMIN_TOKEN ? ('?token=' + encodeURIComponent(window.ADMIN_TOKEN)) : '');
-    const res = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({items})});
-    const js = await res.json();
-    if (!js.ok) throw new Error(js.error || 'save failed');
-    if (status) status.textContent = 'gespeichert';
-  } catch (e) {
-    if (status) status.textContent = 'Fehler beim Speichern';
-    console.warn(e);
-  }
-}
-document.addEventListener('DOMContentLoaded', () => {
-  document.getElementById('sortimentLoadBtn')?.addEventListener('click', adminLoadSortiments);
-  document.getElementById('sortimentSaveBtn')?.addEventListener('click', adminSaveSortiments);
-  // auto-load once
-  adminLoadSortiments();
-});
 </script>
 </body>
 </html>
