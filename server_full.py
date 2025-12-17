@@ -192,7 +192,7 @@ def _update_csv_row_for_art(artikelnr: str, meta: Dict[str, Any]) -> None:
 USAGE_JSON = EXPORT_DIR / "ki_usage.json"
 
 # Admin-Schutz (frei wählbar, NICHT OpenAI-Key)
-ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "").strip()  # leer => Admin offen (nur für Tests)
+ADMIN_TOKEN = (os.getenv("MYAUKTION_ADMIN_TOKEN", "") or os.getenv("ADMIN_TOKEN", "")).strip()  # leer => Admin offen (nur für Tests)
 DEFAULT_BUDGET_EUR = float((os.getenv("KI_BUDGET_EUR", "10") or "10").replace(",", "."))
 COST_PER_SUCCESS_CALL_EUR = float((os.getenv("KI_COST_PER_SUCCESS_CALL_EUR", "0.003") or "0.003").replace(",", "."))
 
