@@ -166,6 +166,10 @@
 
         <div class="img-strip flex gap-2 overflow-x-auto pb-1" id="img-strip"></div>
 
+        <div class="flex justify-end mt-2">
+          <button id="btn-set-cover" type="button" class="btn btn-ghost text-xs hidden">⭐ Als Titelbild setzen</button>
+        </div>
+
         <div class="flex flex-col gap-2 mt-3">
           <button id="btn-photo" class="btn btn-primary text-sm">
             <i data-lucide="camera" class="w-4 h-4"></i> Foto auswählen
@@ -236,6 +240,7 @@
   const fFile = document.getElementById('f-file');
   const thumb = document.getElementById('thumb');
   const imgStrip = document.getElementById('img-strip');
+  const btnSetCover = document.getElementById('btn-set-cover');
 
   const fTitle = document.getElementById('f-title');
   const fDesc = document.getElementById('f-desc');
@@ -258,6 +263,9 @@
 
   const logEl = document.getElementById('log');
   const toastWrap = document.getElementById('toast-wrap');
+
+  let selectedImageUrl = "";
+  let selectedFilename = "";
 
   // ⚙️ Settings
   const SETTINGS_KEY = "MYAUKTION_SETTINGS_V1";
@@ -316,6 +324,8 @@
     sAngeliefert.value = s.angeliefert || "";
     sBetriebsmittel.value = s.betriebsmittel || "";
     settingsMini.textContent = "Einstellungen: " + settingsText(s);
+    // Main-Feld Menge übernehmen
+    try{ fMenge.value = String(s.menge ?? 1); }catch(e){}
   }
 
   function readSettingsFromUI(){
@@ -410,14 +420,53 @@
     if(!art) return;
     const res = await fetch('/api/images?artikelnr=' + encodeURIComponent(art));
     const j = await res.json();
+
     imgStrip.innerHTML = '';
-    (j.files||[]).forEach(url=>{
+    selectedImageUrl = "";
+    selectedFilename = "";
+
+    const files = (j.files||[]);
+    const cover = (j.cover||"").trim();
+
+    files.forEach((url, idx)=>{
       const img = document.createElement('img');
       img.src = url;
-      img.onclick = ()=> thumb.innerHTML = `<img src="${url}">`;
+
+      // filename aus URL
+      const fname = String(url).split('/').pop();
+
+      // cover markieren (erster in Liste ist ohnehin cover-first, aber zur Sicherheit)
+      const isCover = (fname === cover) || (idx===0 && !cover && files.length);
+
+      img.title = isCover ? "Titelbild" : "Bild";
+
+      img.onclick = ()=>{
+        selectedImageUrl = url;
+        selectedFilename = fname;
+        thumb.innerHTML = `<img src="${url}">`;
+
+        // UI highlight
+        [...imgStrip.querySelectorAll('img')].forEach(el=> el.style.outline = "");
+        img.style.outline = "2px solid rgba(255,255,255,.85)";
+
+        if(btnSetCover){
+          btnSetCover.classList.toggle("hidden", !selectedFilename);
+        }
+      };
+
+      if(isCover){
+        // kleines Badge per outline (visuell leicht)
+        img.style.border = "2px solid rgba(239,68,68,.75)";
+      }
+
       imgStrip.appendChild(img);
     });
+
+    if(btnSetCover){
+      btnSetCover.classList.add("hidden");
+    }
   }
+
 
   async function refreshMeta(){
     const art = (fArt.value||"").trim();
@@ -479,6 +528,10 @@
   thumb.onclick = ()=> fFile.click();
 
   fArt.addEventListener('input', updateArtnrHint);
+  fMenge.addEventListener('change', ()=>{
+    try{ const s=loadSettings(); s.menge = parseInt((fMenge.value||'1'),10)||1; saveSettings(s); applySettingsToUI(); }catch(e){}
+  });
+
   fArt.addEventListener('blur', async ()=>{
     updateArtnrHint();
     if(!validArtNr()) return;
@@ -573,9 +626,12 @@
     fDesc.value = "";
     fRetail.value = "";
     fRuf.value = "";
-    // Immer zurücksetzen
-    sLagerstand.value = "1";
-    sUebernehmen.value = "1";
+    selectedImageUrl = "";
+    selectedFilename = "";
+    if(btnSetCover) btnSetCover.classList.add("hidden");
+    // Menge auf gespeicherten Default
+    try{ const s = loadSettings(); fMenge.value = String(s.menge ?? 1); }catch(e){}
+    // Settings beibehalten (Defaults bleiben)
     if(typeof applyPriceMode === "function") applyPriceMode();
     statusText.textContent = "Bereit.";
     try{ window.scrollTo({top:0, behavior:"smooth"});}catch(e){}
@@ -589,7 +645,9 @@
     const art = (fArt.value||"").trim();
     const s = loadSettings();
 
-    // Menge auch in Settings speichern (damit es beim nächsten Artikel gleich bleibt)
+    const mengeVal = parseInt((fMenge.value||"1"),10) || 1;
+
+    // Menge (und Betriebsmittel etc.) als Default speichern, damit es beim nächsten Artikel gleich bleibt
     try{ s.menge = mengeVal; saveSettings(s); applySettingsToUI(); }catch(e){}
 
     const payload = {
@@ -635,6 +693,27 @@
 
     applySettingsToUI();
     applyPriceMode();
+
+    if(btnSetCover){
+      btnSetCover.onclick = async ()=>{
+        if(!validArtNr()) return alert("Artikelnummer muss mindestens 6-stellig sein.");
+        if(!selectedFilename) return toast("Bitte ein Bild auswählen");
+        const art = (fArt.value||"").trim();
+        const res = await fetch('/api/set_cover', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({artikelnr: art, filename: selectedFilename})
+        });
+        const j = await res.json();
+        if(!res.ok || !j.ok){
+          alert("Titelbild Fehler: " + (j.error || res.status));
+          return;
+        }
+        toast("Titelbild gesetzt");
+        await refreshImages();
+      };
+    }
+
 
     btnSettings.onclick = toggleSettings;
 

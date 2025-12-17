@@ -20,6 +20,26 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 
+@app.post("/api/set_cover")
+def set_cover(payload: Dict[str, Any]):
+    artikelnr = str(payload.get("artikelnr", "")).strip()
+    filename = str(payload.get("filename", "")).strip()
+    if not artikelnr or not filename:
+        return JSONResponse({"ok": False, "error": "artikelnr/filename fehlt"}, status_code=400)
+
+    if not filename.startswith(f"{artikelnr}_") or not filename.lower().endswith(".jpg"):
+        return JSONResponse({"ok": False, "error": "ungültiger Dateiname"}, status_code=400)
+
+    path = RAW_DIR / filename
+    if not path.exists():
+        return JSONResponse({"ok": False, "error": "Datei nicht gefunden"}, status_code=404)
+
+    mj = _load_meta_json(artikelnr)
+    mj["cover_image"] = filename
+    _save_meta_json(artikelnr, mj)
+    return {"ok": True, "cover": filename}
+
+
 
 def _normalize_title(title: str) -> str:
     t = (title or "").strip()
@@ -208,6 +228,7 @@ def _default_meta(artikelnr: str) -> Dict[str, Any]:
         "ki_runtime_ms": 0,
         "batch_done": False,
         "last_image": "",
+        "cover_image": "",
         "created_at": int(time.time()),
         "updated_at": int(time.time()),
     }
@@ -551,6 +572,8 @@ async def upload(
     # set pending, damit Polling NICHT bei altem realtime sofort stoppt
     mj = _load_meta_json(artikelnr)
     mj["last_image"] = out.name
+    if not mj.get("cover_image"):
+        mj["cover_image"] = out.name
     mj["ki_source"] = "pending"
     mj["ki_last_error"] = ""
     mj["batch_done"] = False
@@ -567,11 +590,19 @@ async def upload(
 @app.get("/api/images")
 def images(artikelnr: str):
     artikelnr = str(artikelnr).strip()
+    mj = _load_meta_json(artikelnr)
+    cover = (mj.get("cover_image") or "").strip()
+
     files = []
-    for f in sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg")):
+    paths = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
+    # cover first (if present)
+    if cover:
+        paths.sort(key=lambda p: (0 if p.name == cover else 1, p.name))
+
+    for f in paths:
         rel = f.relative_to(BASE_DIR)
-        files.append("/static/" + str(rel).replace("\\", "/"))
-    return {"ok": True, "files": files}
+        files.append("/static/" + str(rel).replace("\", "/"))
+    return {"ok": True, "files": files, "cover": cover}
 
 
 
@@ -594,6 +625,8 @@ def delete_last_image(data: Dict[str, Any]):
     # meta last_image aktualisieren
     mj = _load_meta_json(artikelnr)
     mj["last_image"] = files[-2].name if len(files) >= 2 else ""
+    if (mj.get("cover_image") or "") == target.name:
+        mj["cover_image"] = mj["last_image"] or ""
     _save_meta_json(artikelnr, mj)
 
     return {"ok": True, "deleted": target.name}
@@ -622,6 +655,8 @@ def delete_image(payload: Dict[str, Any]):
     mj = _load_meta_json(artikelnr)
     pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
     mj["last_image"] = pics[-1].name if pics else ""
+    if (mj.get("cover_image") or "") == filename:
+        mj["cover_image"] = mj["last_image"] or ""
     _save_meta_json(artikelnr, mj)
 
     _rebuild_csv_export()
@@ -654,6 +689,7 @@ def meta(artikelnr: str):
         "ki_source": mj.get("ki_source", "") or "",
         "ki_last_error": mj.get("ki_last_error", "") or "",
         "last_image": mj.get("last_image", "") or "",
+        "cover_image": mj.get("cover_image", "") or "",
         "image": img_url,
     }
 
