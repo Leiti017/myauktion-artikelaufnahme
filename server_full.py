@@ -143,34 +143,24 @@ def _update_csv_row_for_art(artikelnr: str, meta: Dict[str, Any]) -> None:
         rows = [CSV_HEADERS]
     else:
         rows[0] = CSV_HEADERS
-
     # Build new row
     art = str(artikelnr)
-    menge = int(meta.get("menge") or 1)
-    titel = str(meta.get("titel") or "")
+    bezeichnung = str(meta.get("titel") or meta.get("bezeichnung") or "")
     beschr = str(meta.get("beschreibung") or "")
+    menge = int(meta.get("menge") or 1)
     preis = _format_rufpreis(meta.get("rufpreis", 0))
+    ladenpreis = _format_listenpreis(meta.get("retail_price", meta.get("listenpreis", 0)))
     lagerort = str(meta.get("lagerort") or "")
     lagerstand = int(meta.get("lagerstand") or 1)
     uebernehmen = int(meta.get("uebernehmen") or 1)
-    einl = str(meta.get("einlieferer_id") or meta.get("einlieferer") or "")
-    angel = str(meta.get("angeliefert") or "")
-    betr = str(meta.get("betriebsmittel") or "")
-    mitarb = str(meta.get("mitarbeiter") or "")
-    bezeichnung = str(meta.get("titel") or meta.get("bezeichnung") or "")
-beschr = str(meta.get("beschreibung") or "")
-menge = int(meta.get("menge") or 1)
-preis = _format_rufpreis(meta.get("rufpreis", 0))
-ladenpreis = _format_listenpreis(meta.get("retail_price", meta.get("listenpreis", 0)))
-lagerort = str(meta.get("lagerort") or "")
-lagerstand = int(meta.get("lagerstand") or 1)
-uebernehmen = int(meta.get("uebernehmen") or 1)
-angeliefert = str(meta.get("angeliefert") or "")
-betriebsmittel = str(meta.get("betriebsmittel") or "")
-mitarbeiter = str(meta.get("mitarbeiter") or "")
-sortiment = str(meta.get("sortiment") or "")
+    sortiment = str(meta.get("sortiment") or "")
+    angeliefert = str(meta.get("angeliefert") or "")
+    betriebsmittel = str(meta.get("betriebsmittel") or "")
+    mitarbeiter = str(meta.get("mitarbeiter") or "")
+
     new_row = [art, bezeichnung, beschr, str(menge), preis, ladenpreis, lagerort, str(lagerstand), str(uebernehmen), sortiment, angeliefert, betriebsmittel, mitarbeiter]
-# Replace or append
+
+    # Replace or append
 
     out_rows = [rows[0]]
     replaced = False
