@@ -10,33 +10,7 @@
 # - Live-Check Artikelnummer: /api/check_artnr
 # - Foto löschen: /api/delete_image
 # - CSV Export (inkl. Kategorie)
-# - Admin-Only Budget/Flags (Token gesc
-@app.post("/api/set_cover")
-def set_cover(data: Dict[str, Any]):
-    artikelnr = str(data.get("artikelnr") or data.get("article_id") or data.get("artikelnr", "")).strip()
-    filename = str(data.get("filename") or data.get("name") or data.get("file") or data.get("url") or "").strip()
-
-    if "/" in filename:
-        filename = filename.split("/")[-1]
-    if "?" in filename:
-        filename = filename.split("?", 1)[0]
-
-    if not artikelnr or not filename:
-        return JSONResponse({"ok": False, "error": "artikelnr/filename fehlt"}, status_code=400)
-
-    if not filename.startswith(f"{artikelnr}_") or not filename.lower().endswith(".jpg"):
-        return JSONResponse({"ok": False, "error": "ungültiger Dateiname"}, status_code=400)
-
-    path = RAW_DIR / filename
-    if not path.exists():
-        return JSONResponse({"ok": False, "error": "Datei nicht gefunden"}, status_code=404)
-
-    mj = _load_meta_json(artikelnr)
-    mj["cover"] = filename
-    _save_meta_json(artikelnr, mj)
-    return {"ok": True, "cover": filename}
-
-hützt): /api/admin/budget /api/admin/articles
+# - Admin-Only Budget/Flags (Token geschützt): /api/admin/budget /api/admin/articles
 #
 # Start:
 #   python -m uvicorn server_full:app --host 0.0.0.0 --port 5050
@@ -72,7 +46,7 @@ async def _no_cache_html(request, call_next):
     resp = await call_next(request)
     try:
         ct = resp.headers.get("content-type", "")
-        if ct.startswith("text/html") or request.url.path in ("/", "/admin", "/static/site.webmanifest", "/static/manifest.webmanifest") or request.url.path.startswith("/static/uploads/"):
+        if ct.startswith("text/html") or request.url.path in ("/", "/index.html", "/admin", "/articles") or request.url.path.endswith(("manifest.webmanifest","manifest.json")) or request.url.path.startswith("/static/uploads/"):
             resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
             resp.headers["Pragma"] = "no-cache"
             resp.headers["Expires"] = "0"
@@ -919,22 +893,42 @@ async def upload(
 @app.get("/api/images")
 def images(artikelnr: str):
     artikelnr = str(artikelnr).strip()
-    mj = _load_meta_json(artikelnr)
-    cover = (mj.get("cover") or "").strip()
+    meta = _load_meta_json(artikelnr)
+    cover = str(meta.get("cover") or "").strip()
 
     files = []
     for f in sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg")):
         rel = f.relative_to(BASE_DIR)
-        files.append("/static/" + str(rel).replace("\", "/"))
+        files.append("/static/" + str(rel).replace("\\", "/"))
 
-    # cover-first sorting (if cover set)
+    # cover-first ordering
     if cover:
-        def _basename(url: str) -> str:
-            b = url.split("/")[-1]
-            return b.split("?", 1)[0]
-        files.sort(key=lambda u: 0 if _basename(u) == cover else 1)
+        files.sort(key=lambda u: 0 if u.endswith("/" + cover) or u.endswith(cover) else 1)
 
     return {"ok": True, "files": files, "cover": cover}
+
+@app.post("/api/set_cover")
+def set_cover(payload: Dict[str, Any]):
+    artikelnr = str(payload.get("artikelnr", "")).strip()
+    filename = str(payload.get("filename", "") or payload.get("file", "") or payload.get("url", "")).strip()
+    if "/" in filename:
+        filename = filename.split("/")[-1]
+    if "?" in filename:
+        filename = filename.split("?")[0]
+
+    if not artikelnr or not filename:
+        return JSONResponse({"ok": False, "error": "missing data"}, status_code=400)
+
+    p = RAW_DIR / filename
+    if not p.exists():
+        return JSONResponse({"ok": False, "error": "file not found"}, status_code=404)
+
+    meta = _load_meta_json(artikelnr)
+    meta["cover"] = filename
+    _save_meta_json(artikelnr, meta)
+    return {"ok": True, "cover": filename}
+
+
 
 
 
@@ -999,8 +993,6 @@ def delete_image(payload: Dict[str, Any]):
     mj = _load_meta_json(artikelnr)
     pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
     mj["last_image"] = pics[-1].name if pics else ""
-    if (mj.get("cover") or "").strip() == filename:
-        mj["cover"] = pics[0].name if pics else ""
     _save_meta_json(artikelnr, mj)
 
     _rebuild_csv_export()
