@@ -89,6 +89,7 @@ CSV_FIELDS = [
     "Lagerstand",
     "Uebernehmen",
     "Sortiment",
+    "Einlieferer-ID",
     "Angeliefert",
     "Betriebsmittel",
     "Mitarbeiter",
@@ -150,6 +151,7 @@ def _update_csv_row_for_art(artikelnr: str, meta: Dict[str, Any]) -> None:
     lagerstand = int(meta.get("lagerstand") or 1)
     uebernehmen = int(meta.get("uebernehmen") or 1)
     sortiment = str(meta.get("sortiment") or "")
+    einl = str(meta.get("einlieferer_id", meta.get("einlieferer", "")) or "")
     angel = str(meta.get("angeliefert") or "")
     betr = str(meta.get("betriebsmittel") or "")
     mitarb = str(meta.get("mitarbeiter") or "")
@@ -165,6 +167,7 @@ def _update_csv_row_for_art(artikelnr: str, meta: Dict[str, Any]) -> None:
         str(lagerstand),
         str(uebernehmen),
         sortiment,
+        einl,
         angel,
         betr,
         mitarb,
@@ -509,19 +512,24 @@ def _rebuild_csv_export() -> None:
         nr = str(d.get("artikelnr") or meta_file.stem)
         rows.append({
             "ArtikelNr": nr,
-            "Menge": int(d.get("menge", 1) or 1),
-            "Titel": str(d.get("titel", "") or ""),
+            "Bezeichnung": str(d.get("titel", "") or ""),
             "Beschreibung": str(d.get("beschreibung", "") or ""),
+            "Menge": int(d.get("menge", 1) or 1),
             "Preis": _format_rufpreis(d.get("rufpreis", 0.0) or 0.0),
+            "Ladenpreis": (lambda v: (f"{v:.2f}".replace(".", ",") if v else ""))(
+                (lambda raw: float(str(raw).replace(",", ".")) if str(raw).strip() else 0.0)(
+                    d.get("retail_price", d.get("listenpreis", 0)) or 0
+                )
+            ),
             "Lagerort": str(d.get("lagerort", "") or ""),
             "Lagerstand": int(d.get("lagerstand", 1) or 1),
             "Uebernehmen": int(d.get("uebernehmen", 1) or 1),
-            "EinliefererID": str(d.get("einlieferer_id", d.get("einlieferer", "")) or ""),
+            "Sortiment": str(d.get("sortiment", "") or ""),
+            "Einlieferer-ID": str(d.get("einlieferer_id", d.get("einlieferer", "")) or ""),
             "Angeliefert": str(d.get("angeliefert", "") or ""),
             "Betriebsmittel": str(d.get("betriebsmittel", "") or ""),
             "Mitarbeiter": str(d.get("mitarbeiter", "") or ""),
         })
-
     def _sort_key(r: dict):
         try:
             return int(r.get("ArtikelNr", 0))
@@ -920,6 +928,8 @@ async def upload(
     # set pending, damit Polling NICHT bei altem realtime sofort stoppt
     mj = _load_meta_json(artikelnr)
     mj["last_image"] = out.name
+    if not str(mj.get("cover") or "").strip():
+        mj["cover"] = out.name
     mj["ki_source"] = "pending"
     mj["ki_last_error"] = ""
     mj["batch_done"] = False
@@ -936,19 +946,48 @@ async def upload(
 @app.get("/api/images")
 def images(artikelnr: str):
     artikelnr = str(artikelnr).strip()
-    files = []
+    mj = _load_meta_json(artikelnr)
+    cover = str(mj.get("cover") or "").strip()
+
+    files: list[str] = []
     for f in sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg")):
         rel = f.relative_to(BASE_DIR)
         files.append("/static/" + str(rel).replace("\\", "/"))
-    return {"ok": True, "files": files}
 
+    # cover-first ordering (if cover exists)
+    if cover:
+        def _fname(u: str) -> str:
+            return str(u).split("/")[-1]
+        files.sort(key=lambda u: (0 if _fname(u) == cover else 1, u))
 
-
+    return {"ok": True, "files": files, "cover": cover}
 @app.post("/api/delete_last_image")
 def delete_last_image(data: Dict[str, Any]):
     artikelnr = str(data.get("artikelnr", "")).strip()
     if not artikelnr:
         return JSONResponse({"ok": False, "error": "Artikelnummer fehlt"}, status_code=400)
+
+@app.post("/api/set_cover")
+def set_cover(data: Dict[str, Any]):
+    artikelnr = str(data.get("artikelnr") or "").strip()
+    filename = str(data.get("filename") or "").strip()
+    if not artikelnr or not filename:
+        return {"ok": False, "error": "missing"}
+
+    mj = _load_meta_json(artikelnr)
+
+    # verify file belongs to this article
+    if not filename.startswith(f"{artikelnr}_"):
+        return {"ok": False, "error": "invalid"}
+
+    path = RAW_DIR / filename
+    if not path.exists():
+        return {"ok": False, "error": "not_found"}
+
+    mj["cover"] = filename
+    _save_meta_json(artikelnr, mj)
+    return {"ok": True, "cover": filename}
+
 
     files = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
     if not files:
