@@ -76,7 +76,11 @@
         <div class="text-xs md:text-sm text-white/80">BEI UNS BESTIMMST DU DEN PREIS!</div>
       </div>
     </div>
-    <a href="/admin" class="underline text-sm opacity-90">Admin</a>
+    
+    <div class="flex items-center gap-3 text-sm">
+      <button id="btn-admin-open" type="button" class="underline opacity-90">Admin</button>
+      <a href="/articles" class="underline opacity-90">Gesamtartikel</a>
+    </div>
   </header>
 
   <main class="glass rounded-3xl p-4 md:p-6 shadow-xl">
@@ -787,6 +791,23 @@
       btnSettings.textContent = "⬆️ Einstellungen";
     }
   });
+
+  // Admin (Passwort wie Budget-Token)
+  (function(){
+    const btn = document.getElementById('btn-admin-open');
+    if(!btn) return;
+    btn.addEventListener('click', () => {
+      let t = (localStorage.getItem('MYAUKTION_ADMIN_TOKEN') || '').trim();
+      if(!t){
+        t = (prompt('Admin Passwort:') || '').trim();
+        if(!t) return;
+        localStorage.setItem('MYAUKTION_ADMIN_TOKEN', t);
+      }
+      // Admin HTML ist serverseitig geschützt -> Token muss als Query mit
+      window.location.href = '/admin?token=' + encodeURIComponent(t);
+    });
+  })();
+
 </script>
 </body>
 </html>

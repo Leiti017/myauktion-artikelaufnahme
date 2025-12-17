@@ -704,7 +704,10 @@ def root():
 
 
 @app.get("/admin")
-def admin_root():
+def admin_root(request: Request):
+    guard = _admin_guard(request)
+    if guard:
+        return guard
     return FileResponse(str(BASE_DIR / "admin.html"))
 
 
