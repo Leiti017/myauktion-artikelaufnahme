@@ -192,7 +192,7 @@ def _update_csv_row_for_art(artikelnr: str, meta: Dict[str, Any]) -> None:
 USAGE_JSON = EXPORT_DIR / "ki_usage.json"
 
 # Admin-Schutz (frei wählbar, NICHT OpenAI-Key)
-ADMIN_TOKEN = (os.getenv("MYAUKTION_ADMIN_TOKEN", "") or os.getenv("ADMIN_TOKEN", "")).strip()  # leer => Admin offen (nur für Tests)
+ADMIN_TOKEN = (os.getenv("MYAUKTION_ADMIN_TOKEN", "") or os.getenv("ADMIN_TOKEN", "")).strip()  # MUSS gesetzt sein, sonst bleibt Admin gesperrt
 DEFAULT_BUDGET_EUR = float((os.getenv("KI_BUDGET_EUR", "10") or "10").replace(",", "."))
 COST_PER_SUCCESS_CALL_EUR = float((os.getenv("KI_COST_PER_SUCCESS_CALL_EUR", "0.003") or "0.003").replace(",", "."))
 
@@ -383,8 +383,9 @@ def _gdrive_backup_article(artikelnr: str) -> None:
 # Admin Auth
 # ----------------------------
 def _is_admin(request: Request) -> bool:
+    # Wenn kein Token konfiguriert ist, bleibt Admin aus Sicherheitsgründen gesperrt
     if not ADMIN_TOKEN:
-        return True
+        return False
     token = (request.headers.get("X-Admin-Token", "") or "").strip()
     if not token:
         token = (request.query_params.get("token", "") or "").strip()
@@ -705,10 +706,64 @@ def root():
 
 @app.get("/admin")
 def admin_root(request: Request):
-    guard = _admin_guard(request)
-    if guard:
-        return guard
-    return FileResponse(str(BASE_DIR / "admin.html"))
+    if _is_admin(request):
+        return FileResponse(str(BASE_DIR / "admin.html"))
+
+    # Login-Seite (statt JSON), wenn man /admin direkt im Browser öffnet
+    if not ADMIN_TOKEN:
+        msg = "Admin ist gesperrt: Environment Variable MYAUKTION_ADMIN_TOKEN (oder ADMIN_TOKEN) ist nicht gesetzt."
+    else:
+        msg = ""
+
+    html = f"""
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Admin Login</title>
+  <style>
+    body{{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;background:#0b0f14;color:#e8eef6;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:24px;}}
+    .card{{max-width:420px;width:100%;background:#121826;border:1px solid #1f2a3a;border-radius:16px;padding:18px;box-shadow:0 10px 30px rgba(0,0,0,.35);}}
+    h1{{font-size:18px;margin:0 0 10px 0;}}
+    p{{opacity:.85;margin:0 0 12px 0;}}
+    input{{width:100%;padding:12px 12px;border-radius:12px;border:1px solid #2a3a52;background:#0e1420;color:#e8eef6;outline:none;}}
+    button{{margin-top:10px;width:100%;padding:12px 12px;border-radius:12px;border:0;background:#2b7cff;color:white;font-weight:700;cursor:pointer;}}
+    .warn{{margin-top:10px;color:#ffcc66;}}
+    .err{{margin-top:10px;color:#ff6b6b;}}
+    small{{display:block;margin-top:10px;opacity:.75;}}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Admin Bereich</h1>
+    <p>Bitte Admin-Passwort eingeben.</p>
+    {"<div class='warn'>"+msg+"</div>" if msg else ""}
+    <input id="pw" type="password" placeholder="Passwort" autocomplete="current-password" />
+    <button id="go">Einloggen</button>
+    <div id="e" class="err" style="display:none;"></div>
+    <small>Tipp: Wenn du über den Admin-Button kommst, wird das Passwort im Browser gespeichert.</small>
+  </div>
+<script>
+  const btn = document.getElementById('go');
+  const pw  = document.getElementById('pw');
+  const err = document.getElementById('e');
+  function showErr(t){{ err.style.display='block'; err.textContent=t; }}
+  btn.addEventListener('click', async () => {{
+    const token = (pw.value||'').trim();
+    if(!token) return showErr('Bitte Passwort eingeben.');
+    const r = await fetch('/api/admin/ping?token=' + encodeURIComponent(token));
+    if(!r.ok) return showErr('Falsches Passwort.');
+    localStorage.setItem('admin_token', token);
+    location.href = '/admin?token=' + encodeURIComponent(token);
+  }});
+  pw.addEventListener('keydown', (ev)=>{{ if(ev.key==='Enter') btn.click(); }});
+</script>
+</body>
+</html>
+"""
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(html, status_code=401)
 
 
 @app.get("/articles")
@@ -1152,6 +1207,14 @@ def admin_budget(request: Request):
         "last_success_at": int(u.get("last_success_at", 0)),
         "last_error": u.get("last_error", "") or "",
     }
+
+
+@app.get("/api/admin/ping")
+def admin_ping(request: Request):
+    guard = _admin_guard(request)
+    if guard:
+        return guard
+    return {"ok": True}
 
 
 @app.get("/api/admin/articles")

@@ -76,10 +76,9 @@
         <div class="text-xs md:text-sm text-white/80">BEI UNS BESTIMMST DU DEN PREIS!</div>
       </div>
     </div>
-    
-    <div class="flex items-center gap-3 text-sm">
-      <button id="btn-admin-open" type="button" class="underline opacity-90">Admin</button>
-      <a href="/articles" class="underline opacity-90">Gesamtartikel</a>
+    <div class="flex items-center gap-4">
+      <a id="btn-admin" href="/admin" class="underline text-sm opacity-90">Admin</a>
+      <a href="/articles" class="underline text-sm opacity-90">Gesamtartikel</a>
     </div>
   </header>
 
@@ -792,22 +791,22 @@
     }
   });
 
-  // Admin (Passwort wie Budget-Token)
-  (function(){
-    const btn = document.getElementById('btn-admin-open');
-    if(!btn) return;
-    btn.addEventListener('click', () => {
-      let t = (localStorage.getItem('MYAUKTION_ADMIN_TOKEN') || '').trim();
-      if(!t){
-        t = (prompt('Admin Passwort:') || '').trim();
-        if(!t) return;
-        localStorage.setItem('MYAUKTION_ADMIN_TOKEN', t);
-      }
-      // Admin HTML ist serverseitig geschützt -> Token muss als Query mit
-      window.location.href = '/admin?token=' + encodeURIComponent(t);
-    });
-  })();
-
+// Admin-Passwort-Flow
+(function(){
+  const a = document.getElementById('btn-admin');
+  if(!a) return;
+  a.addEventListener('click', function(ev){
+    ev.preventDefault();
+    let token = (localStorage.getItem('admin_token') || '').trim();
+    if(!token){
+      token = prompt('Admin Passwort:') || '';
+      token = token.trim();
+      if(!token) return;
+      localStorage.setItem('admin_token', token);
+    }
+    window.location.href = '/admin?token=' + encodeURIComponent(token);
+  });
+})();
 </script>
 </body>
 </html>
