@@ -63,10 +63,14 @@ app.add_middleware(
 
 BASE_DIR = Path(__file__).resolve().parent
 
-RAW_DIR = BASE_DIR / "uploads" / "raw"
-PROCESSED_DIR = BASE_DIR / "uploads" / "processed"
-EXPORT_DIR = BASE_DIR / "export"
-RAW_DIR.mkdir(parents=True, exist_ok=True)
+# Persistente Datenablage:
+# - Lokal/Dev: im Projektordner (BASE_DIR)
+# - Render: mit Persistent Disk z.B. DATA_DIR=/var/data setzen, damit Updates/Deploys keine Artikel löschen.
+DATA_DIR = Path(os.environ.get("DATA_DIR", str(BASE_DIR))).resolve()
+
+RAW_DIR = DATA_DIR / "uploads" / "raw"
+PROCESSED_DIR = DATA_DIR / "uploads" / "processed"
+EXPORT_DIR = DATA_DIR / "export"RAW_DIR.mkdir(parents=True, exist_ok=True)
 PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
