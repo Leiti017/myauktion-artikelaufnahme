@@ -5,7 +5,17 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>MyAuktion · Gesamtartikel</title>
-  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- FAVICONS & APP ICONS -->
+  <link rel="icon" href="/static/favicon.ico">
+  <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/static/apple-touch-icon.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="/static/android-chrome-192x192.png">
+  <link rel="icon" type="image/png" sizes="512x512" href="/static/android-chrome-512x512.png">
+  <meta name="theme-color" content="#1d4ed8">
+
+<script src="https://cdn.tailwindcss.com"></script>
   <style>
     body{min-height:100vh;background:linear-gradient(135deg,#0ea5e9,#1d4ed8 60%,#1e293b);color:#fff}
     .glass{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.16);backdrop-filter:blur(12px)}
@@ -14,8 +24,6 @@
     .btn-primary{background:#fff;color:#0f172a;box-shadow:0 8px 18px rgba(0,0,0,.2)}
   </style>
 </head>
-<link rel="icon" type="image/png" href="/static/my_icon.ico">
-<link rel="apple-touch-icon" href="/static/my_icon.ico">
 <body>
 <div class="max-w-7xl mx-auto px-4 py-6">
   <header class="flex items-center justify-between mb-6">
@@ -66,7 +74,7 @@
             <th class="py-2 pr-3">Rufpreis</th>
             <th class="py-2 pr-3">Lagerort</th>
             <th class="py-2 pr-3">Mitarbeiter</th>
-          <th class=\"py-2 pr-3\">Bearbeiten</th></tr>
+          </tr>
         </thead>
         <tbody id="rows" class="align-top"></tbody>
       </table>
@@ -115,7 +123,7 @@
           <td class="py-2 pr-3">${it.menge ?? 1}</td>
           <td class="py-2 pr-3">${money(it.rufpreis)}</td>
           <td class="py-2 pr-3">${String(it.lagerort||"").replaceAll("<","&lt;")}</td>
-          <td class="py-2 pr-3">${(it.mitarbeiter||"")}</td><td class=\"py-2 pr-3\"><a class=\"underline\" href=\"/?edit=${it.artikelnr}\">Bearbeiten</a></td>
+          <td class="py-2 pr-3">${(it.mitarbeiter||"")}</td>
         </tr>
       `;
     }).join("");
