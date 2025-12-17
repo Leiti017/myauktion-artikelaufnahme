@@ -465,7 +465,14 @@ def _usage_fail(err: str) -> None:
 # CSV Export (Rebuild nutzt dieselben CSV_FIELDS wie Live-Update)
 # ----------------------------
 def _rebuild_csv_export() -> None:
-    rows = []
+    """Rebuild komplette artikel_export.csv aus allen *.json Metadaten.
+
+    - Trennzeichen: ;
+    - Encoding: UTF-8 mit BOM (utf-8-sig) damit Excel sauber spaltet
+    - Sortiment/Kategorie werden NICHT exportiert
+    - Mitarbeiter ist letzte Spalte
+    """
+    rows: list[dict] = []
     for meta_file in RAW_DIR.glob("*.json"):
         try:
             d = json.loads(meta_file.read_text("utf-8"))
@@ -473,40 +480,26 @@ def _rebuild_csv_export() -> None:
             continue
 
         nr = str(d.get("artikelnr") or meta_file.stem)
-rows.append({
+        rows.append({
+            "ArtikelNr": nr,
+            "Menge": int(d.get("menge", 1) or 1),
+            "Titel": str(d.get("titel", "") or ""),
+            "Beschreibung": str(d.get("beschreibung", "") or ""),
+            "Preis": _format_rufpreis(d.get("rufpreis", 0.0) or 0.0),
+            "Lagerort": str(d.get("lagerort", "") or ""),
+            "Lagerstand": int(d.get("lagerstand", 1) or 1),
+            "Uebernehmen": int(d.get("uebernehmen", 1) or 1),
+            "EinliefererID": str(d.get("einlieferer_id", d.get("einlieferer", "")) or ""),
+            "Angeliefert": str(d.get("angeliefert", "") or ""),
+            "Betriebsmittel": str(d.get("betriebsmittel", "") or ""),
+            "Mitarbeiter": str(d.get("mitarbeiter", "") or ""),
+        })
 
-    "ArtikelNr": nr,
-
-    "Menge": d.get("menge", 1) or 1,
-
-    "Titel": d.get("titel", "") or "",
-
-    "Beschreibung": d.get("beschreibung", "") or "",
-
-    # Preis = Rufpreis (Startpreis)
-
-    "Preis": _format_rufpreis(d.get("rufpreis", 0.0) or 0.0),
-
-    "Lagerort": d.get("lagerort", "") or "",
-
-    "Lagerstand": d.get("lagerstand", 1) or 1,
-
-    "Uebernehmen": d.get("uebernehmen", 1) or 1,
-
-    "EinliefererID": d.get("einlieferer_id", d.get("einlieferer", "")) or "",
-
-    "Angeliefert": d.get("angeliefert", "") or "",
-
-    "Betriebsmittel": d.get("betriebsmittel", "") or "",
-
-    "Mitarbeiter": d.get("mitarbeiter", "") or "",
-
-})
-    def _sort_key(r):
+    def _sort_key(r: dict):
         try:
-            return int(r["ArtikelNr"])
+            return int(r.get("ArtikelNr", 0))
         except Exception:
-            return r["ArtikelNr"]
+            return str(r.get("ArtikelNr", ""))
 
     rows.sort(key=_sort_key)
 
@@ -514,7 +507,7 @@ rows.append({
         w = csv.DictWriter(f, fieldnames=CSV_FIELDS, delimiter=";")
         w.writeheader()
         for r in rows:
-            w.writerow(r)
+            w.writerow({k: r.get(k, "") for k in CSV_FIELDS})
 
     print("[CSV] Export aktualisiert:", EXPORT_CSV)
 
