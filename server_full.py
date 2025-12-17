@@ -20,26 +20,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 
-@app.post("/api/set_cover")
-def set_cover(payload: Dict[str, Any]):
-    artikelnr = str(payload.get("artikelnr", "")).strip()
-    filename = str(payload.get("filename", "")).strip()
-    if not artikelnr or not filename:
-        return JSONResponse({"ok": False, "error": "artikelnr/filename fehlt"}, status_code=400)
-
-    if not filename.startswith(f"{artikelnr}_") or not filename.lower().endswith(".jpg"):
-        return JSONResponse({"ok": False, "error": "ungültiger Dateiname"}, status_code=400)
-
-    path = RAW_DIR / filename
-    if not path.exists():
-        return JSONResponse({"ok": False, "error": "Datei nicht gefunden"}, status_code=404)
-
-    mj = _load_meta_json(artikelnr)
-    mj["cover_image"] = filename
-    _save_meta_json(artikelnr, mj)
-    return {"ok": True, "cover": filename}
-
-
 
 def _normalize_title(title: str) -> str:
     t = (title or "").strip()
@@ -99,23 +79,12 @@ EXPORT_CSV = EXPORT_DIR / "eartikel_export.csv"
 # ----------------------------
 CSV_HEADERS = ["ArtikelNr","Menge","Bezeichnung","Beschreibung","Preis","Lagerort","Lagerstand","uebernehmen","Einlieferer-ID","angeliefert","Betriebsmittel"]
 
-def _format_price_int(val: Any) -> str:
-    """Preis-Feld (Rufpreis): IMMER ohne Dezimalstellen und ohne . oder ,"""
+def _format_price_1dp(val: Any) -> str:
     try:
         f = float(val or 0)
     except Exception:
         f = 0.0
-    return str(int(round(f)))
-
-def _format_listenpreis(val: Any) -> str:
-    """Listenpreis (nur falls irgendwann exportiert): Dezimalpunkt -> Komma"""
-    try:
-        f = float(val or 0)
-    except Exception:
-        f = 0.0
-    s = f"{f:.2f}"
-    return s.replace(".", ",")
-
+    return f"{f:.1f}"
 
 def _ensure_export_csv_exists() -> None:
     if not EXPORT_CSV.exists():
@@ -138,7 +107,7 @@ def _update_csv_row_for_art(artikelnr: str, meta: Dict[str, Any]) -> None:
     if raw.startswith(b"\xef\xbb\xbf"):
         raw = raw[3:]
     text = raw.decode("utf-8", errors="replace")
-    rdr = csv.reader(io.StringIO(text), delimiter=';')
+    rdr = csv.reader(io.StringIO(text))
     rows = list(rdr)
 
     # Ensure headers
@@ -152,7 +121,7 @@ def _update_csv_row_for_art(artikelnr: str, meta: Dict[str, Any]) -> None:
     menge = int(meta.get("menge") or 1)
     titel = str(meta.get("titel") or "")
     beschr = str(meta.get("beschreibung") or "")
-    preis = _format_price_int(meta.get("rufpreis", 0))
+    preis = _format_price_1dp(meta.get("rufpreis", 0))
     lagerort = str(meta.get("lagerort") or "")
     lagerstand = int(meta.get("lagerstand") or 1)
     uebernehmen = int(meta.get("uebernehmen") or 1)
@@ -175,7 +144,7 @@ def _update_csv_row_for_art(artikelnr: str, meta: Dict[str, Any]) -> None:
 
     # Write back with BOM
     bio = io.StringIO()
-    w = csv.writer(bio, delimiter=";", quotechar='"', quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
+    w = csv.writer(bio, delimiter=",", quotechar='"', quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
     for r in out_rows:
         w.writerow(r)
     EXPORT_CSV.write_bytes(("\ufeff" + bio.getvalue()).encode("utf-8"))
@@ -228,7 +197,6 @@ def _default_meta(artikelnr: str) -> Dict[str, Any]:
         "ki_runtime_ms": 0,
         "batch_done": False,
         "last_image": "",
-        "cover_image": "",
         "created_at": int(time.time()),
         "updated_at": int(time.time()),
     }
@@ -317,7 +285,6 @@ CSV_FIELDS = [
 
 
 def _rebuild_csv_export() -> None:
-    """Kompletter CSV Export (Excel-kompatibel: UTF-8 BOM + Semikolon)."""
     rows = []
     for meta_file in RAW_DIR.glob("*.json"):
         try:
@@ -326,38 +293,37 @@ def _rebuild_csv_export() -> None:
             continue
 
         nr = str(d.get("artikelnr") or meta_file.stem)
-        rows.append([
-            nr,
-            str(int(d.get("menge", 1) or 1)),
-            str(d.get("titel", "") or ""),
-            str(d.get("beschreibung", "") or ""),
-            _format_price_int(d.get("rufpreis", 0) or 0),
-            str(d.get("lagerort", "") or ""),
-            str(int(d.get("lagerstand", 1) or 1)),
-            str(int(d.get("uebernehmen", 1) or 1)),
-            str(d.get("einlieferer_id", d.get("einlieferer", "")) or ""),
-            str(d.get("angeliefert", "") or ""),
-            str(d.get("betriebsmittel", "") or ""),
-        ])
+        rows.append({
+            "ArtikelNr": nr,
+            "Menge": d.get("menge", 1) or 1,
+            # Preis = Rufpreis (Startpreis), Ladenpreis = Listenpreis
+            "Preis": d.get("rufpreis", 0.0) or 0.0,
+            "Ladenpreis": d.get("retail_price", 0.0) or 0.0,
+            "Lagerort": d.get("lagerort", "") or "",
+            "Lagerstand": d.get("lagerstand", 1) or 1,
+            "Uebernehmen": d.get("uebernehmen", 1) or 1,
+            "Sortiment": d.get("sortiment", "") or "",
+            "Kategorie": d.get("kategorie", "") or "",
+            "EinliefererID": d.get("einlieferer_id", d.get("einlieferer", "")) or "",
+            "Angeliefert": d.get("angeliefert", "") or "",
+            "Betriebsmittel": d.get("betriebsmittel", "") or "",
+        })
 
     def _sort_key(r):
         try:
-            return int(r[0])
+            return int(r["ArtikelNr"])
         except Exception:
-            return r[0]
+            return r["ArtikelNr"]
 
     rows.sort(key=_sort_key)
 
-    import io, csv
-    bio = io.StringIO()
-    w = csv.writer(bio, delimiter=";", quotechar='"', quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
-    w.writerow(CSV_HEADERS)
-    for r in rows:
-        w.writerow(r)
+    with EXPORT_CSV.open("w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=CSV_FIELDS, delimiter=";")
+        w.writeheader()
+        for r in rows:
+            w.writerow(r)
 
-    EXPORT_CSV.write_bytes(("\ufeff" + bio.getvalue()).encode("utf-8"))
     print("[CSV] Export aktualisiert:", EXPORT_CSV)
-
 
 
 # ----------------------------
@@ -467,7 +433,7 @@ def health():
 @app.get("/api/export.csv")
 def export_csv(from_nr: str | None = None, to_nr: str | None = None):
     """
-    Export CSV (UTF-8 mit BOM + Semikolon für Excel). Optionaler Bereich:
+    Export CSV (UTF-8 mit BOM für Excel). Optionaler Bereich:
       /api/export.csv?from_nr=123458&to_nr=123480
     """
     _ensure_export_csv_exists()
@@ -506,7 +472,7 @@ def export_csv(from_nr: str | None = None, to_nr: str | None = None):
             str(int(meta.get("menge") or 1)),
             str(meta.get("titel") or ""),
             str(meta.get("beschreibung") or ""),
-            _format_price_int(meta.get("rufpreis", 0)),
+            _format_price_1dp(meta.get("rufpreis", 0)),
             str(meta.get("lagerort") or ""),
             str(int(meta.get("lagerstand") or 1)),
             str(int(meta.get("uebernehmen") or 1)),
@@ -516,7 +482,7 @@ def export_csv(from_nr: str | None = None, to_nr: str | None = None):
         ])
 
     bio = io.StringIO()
-    w = csv.writer(bio, delimiter=";", quotechar='"', quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
+    w = csv.writer(bio, delimiter=",", quotechar='"', quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
     w.writerow(CSV_HEADERS)
     for r in rows:
         w.writerow(r)
@@ -572,8 +538,6 @@ async def upload(
     # set pending, damit Polling NICHT bei altem realtime sofort stoppt
     mj = _load_meta_json(artikelnr)
     mj["last_image"] = out.name
-    if not mj.get("cover_image"):
-        mj["cover_image"] = out.name
     mj["ki_source"] = "pending"
     mj["ki_last_error"] = ""
     mj["batch_done"] = False
@@ -590,19 +554,11 @@ async def upload(
 @app.get("/api/images")
 def images(artikelnr: str):
     artikelnr = str(artikelnr).strip()
-    mj = _load_meta_json(artikelnr)
-    cover = (mj.get("cover_image") or "").strip()
-
     files = []
-    paths = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
-    # cover first (if present)
-    if cover:
-        paths.sort(key=lambda p: (0 if p.name == cover else 1, p.name))
-
-    for f in paths:
+    for f in sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg")):
         rel = f.relative_to(BASE_DIR)
-        files.append("/static/" + str(rel).replace("\", "/"))
-    return {"ok": True, "files": files, "cover": cover}
+        files.append("/static/" + str(rel).replace(os.sep, "/"))
+    return {"ok": True, "files": files}
 
 
 
@@ -625,8 +581,6 @@ def delete_last_image(data: Dict[str, Any]):
     # meta last_image aktualisieren
     mj = _load_meta_json(artikelnr)
     mj["last_image"] = files[-2].name if len(files) >= 2 else ""
-    if (mj.get("cover_image") or "") == target.name:
-        mj["cover_image"] = mj["last_image"] or ""
     _save_meta_json(artikelnr, mj)
 
     return {"ok": True, "deleted": target.name}
@@ -655,8 +609,6 @@ def delete_image(payload: Dict[str, Any]):
     mj = _load_meta_json(artikelnr)
     pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
     mj["last_image"] = pics[-1].name if pics else ""
-    if (mj.get("cover_image") or "") == filename:
-        mj["cover_image"] = mj["last_image"] or ""
     _save_meta_json(artikelnr, mj)
 
     _rebuild_csv_export()
@@ -672,7 +624,7 @@ def meta(artikelnr: str):
     img_url = ""
     if pics:
         rel = pics[-1].relative_to(BASE_DIR)
-        img_url = "/static/" + str(rel).replace("\\", "/")
+        img_url = "/static/" + str(rel).replace(os.sep, "/")
 
     return {
         "ok": True,
@@ -689,7 +641,6 @@ def meta(artikelnr: str):
         "ki_source": mj.get("ki_source", "") or "",
         "ki_last_error": mj.get("ki_last_error", "") or "",
         "last_image": mj.get("last_image", "") or "",
-        "cover_image": mj.get("cover_image", "") or "",
         "image": img_url,
     }
 
@@ -840,7 +791,7 @@ def admin_articles(request: Request, category: str = "", only_failed: int = 0):
         img_url = ""
         if pics:
             rel = pics[-1].relative_to(BASE_DIR)
-            img_url = "/static/" + str(rel).replace("\\", "/")
+            img_url = "/static/" + str(rel).replace(os.sep, "/")
 
         items.append({
             "artikelnr": nr,
