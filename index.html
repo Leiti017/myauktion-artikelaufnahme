@@ -561,17 +561,11 @@
   btnDeletePhoto.onclick = async ()=>{
     if(!validArtNr()) return alert("Artikelnummer muss mindestens 6-stellig sein.");
     const art = (fArt.value||"").trim();
-    if(!selectedFilename){
-      return alert("Bitte zuerst ein Foto unten auswählen, das gelöscht werden soll.");
-    }
-    if(!confirm("Ausgewähltes Foto wirklich löschen?
-
-" + selectedFilename)) return;
-
-    const res = await fetch('/api/delete_image', {
+    if(!confirm("Letztes Foto wirklich löschen?")) return;
+    const res = await fetch('/api/delete_last_image', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({artikelnr: art, filename: selectedFilename})
+      body: JSON.stringify({artikelnr: art})
     });
     const j = await res.json();
     if(!res.ok || !j.ok){
@@ -579,7 +573,6 @@
       return;
     }
     toast("Foto gelöscht");
-    // Nach dem Löschen Bilder + Meta neu laden (Titelbild/Selection wird serverseitig korrigiert)
     await refreshImages();
     await refreshMeta();
   };
