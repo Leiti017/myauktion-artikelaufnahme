@@ -2,12 +2,14 @@
 # Features:
 # - Upload + sofortige Vorschau (Frontend)
 # - Mehrere Fotos pro Artikel
+# - Hintergrund-KI (OpenAI Vision) -> Titel, Beschreibung, Kategorie, Listenpreis
 # - Rufpreis = 20% vom Listenpreis, IMMER auf ganze € aufrunden
 # - Bei Upload wird KI automatisch neu gestartet (auch bei Foto 2/3/…)
 # - Polling kann auf "genau dieses Foto" warten (filename)
 # - Kein KI-Fallback-Text: bei Fehler -> ki_source="failed"
 # - Live-Check Artikelnummer: /api/check_artnr
 # - Foto löschen: /api/delete_image
+# - CSV Export (inkl. Kategorie)
 # - Admin-Only Budget/Flags (Token geschützt): /api/admin/budget /api/admin/articles
 #
 # Start:
@@ -34,7 +36,6 @@ from pathlib import Path
 from PIL import Image, ImageOps
 import io, json, time, csv, math, os
 import re
-import os
 from typing import Any, Dict, Optional, Tuple
 
 app = FastAPI()
@@ -70,52 +71,20 @@ RAW_DIR.mkdir(parents=True, exist_ok=True)
 PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
-EXPORT_CSV = EXPORT_DIR / "artikel_export.csv"
+EXPORT_CSV = EXPORT_DIR / "eartikel_export.csv"
 
 
 # ----------------------------
 # CSV Export helpers (UTF-8 BOM + schneller Update)
 # ----------------------------
-CSV_FIELDS = [
-        "ArtikelNr",
-        "Menge",
-        "Titel",
-        "Beschreibung",
-        "Preis",
-        "Lagerort",
-        "Lagerstand",
-        "Uebernehmen",
-        "EinliefererID",
-        "Angeliefert",
-        "Betriebsmittel",
-        "Mitarbeiter",
-    ]
+CSV_HEADERS = ["ArtikelNr","Menge","Bezeichnung","Beschreibung","Preis","Lagerort","Lagerstand","uebernehmen","Einlieferer-ID","angeliefert","Betriebsmittel"]
 
-CSV_HEADERS = CSV_FIELDS
-
-def _format_rufpreis(val: Any) -> str:
-    """Rufpreis immer ohne . oder , (z.B. 40 statt 40.0)."""
+def _format_price_1dp(val: Any) -> str:
     try:
-        f = float(str(val).replace(",", "."))
+        f = float(val or 0)
     except Exception:
         f = 0.0
-    # sauber runden und als int ausgeben
-    return str(int(round(f)))
-
-def _format_listenpreis(val: any) -> str:
-    """Listenpreis mit Komma (z.B. 199,99). Leer bleibt leer."""
-    if val is None:
-        return ""
-    s = str(val).strip()
-    if s == "":
-        return ""
-    try:
-        f = float(s.replace(",", "."))
-    except Exception:
-        return ""
-    # zwei Nachkommastellen, dann Punkt -> Komma
-    return f"{f:.2f}".replace(".", ",")
-
+    return f"{f:.1f}"
 
 def _ensure_export_csv_exists() -> None:
     if not EXPORT_CSV.exists():
@@ -138,7 +107,7 @@ def _update_csv_row_for_art(artikelnr: str, meta: Dict[str, Any]) -> None:
     if raw.startswith(b"\xef\xbb\xbf"):
         raw = raw[3:]
     text = raw.decode("utf-8", errors="replace")
-    rdr = csv.reader(io.StringIO(text), delimiter=";")
+    rdr = csv.reader(io.StringIO(text))
     rows = list(rdr)
 
     # Ensure headers
@@ -152,16 +121,14 @@ def _update_csv_row_for_art(artikelnr: str, meta: Dict[str, Any]) -> None:
     menge = int(meta.get("menge") or 1)
     titel = str(meta.get("titel") or "")
     beschr = str(meta.get("beschreibung") or "")
-    preis = _format_rufpreis(meta.get("rufpreis", 0))
+    preis = _format_price_1dp(meta.get("rufpreis", 0))
     lagerort = str(meta.get("lagerort") or "")
     lagerstand = int(meta.get("lagerstand") or 1)
     uebernehmen = int(meta.get("uebernehmen") or 1)
     einl = str(meta.get("einlieferer_id") or meta.get("einlieferer") or "")
     angel = str(meta.get("angeliefert") or "")
     betr = str(meta.get("betriebsmittel") or "")
-    mitarbeiter = str(meta.get("mitarbeiter") or meta.get("mitarbeiter_name") or "")
-
-    new_row = [art, str(menge), titel, beschr, preis, lagerort, str(lagerstand), str(uebernehmen), einl, angel, betr, mitarbeiter]
+    new_row = [art, str(menge), titel, beschr, preis, lagerort, str(lagerstand), str(uebernehmen), einl, angel, betr]
 
     # Replace or append
     out_rows = [rows[0]]
@@ -177,7 +144,7 @@ def _update_csv_row_for_art(artikelnr: str, meta: Dict[str, Any]) -> None:
 
     # Write back with BOM
     bio = io.StringIO()
-    w = csv.writer(bio, delimiter=";", quotechar='"', quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
+    w = csv.writer(bio, delimiter=",", quotechar='"', quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
     for r in out_rows:
         w.writerow(r)
     EXPORT_CSV.write_bytes(("\ufeff" + bio.getvalue()).encode("utf-8"))
@@ -217,6 +184,7 @@ def _default_meta(artikelnr: str) -> Dict[str, Any]:
         "artikelnr": str(artikelnr),
         "titel": "",
         "beschreibung": "",
+        "kategorie": "",
         "retail_price": 0.0,
         "rufpreis": 0.0,
         "lagerort": "",
@@ -301,19 +269,19 @@ def _usage_fail(err: str) -> None:
 # CSV Export
 # ----------------------------
 CSV_FIELDS = [
-        "ArtikelNr",
-        "Menge",
-        "Titel",
-        "Beschreibung",
-        "Preis",
-        "Lagerort",
-        "Lagerstand",
-        "Uebernehmen",
-        "EinliefererID",
-        "Angeliefert",
-        "Betriebsmittel",
-        "Mitarbeiter",
-    ]
+    "ArtikelNr",
+    "Menge",
+    "Preis",
+    "Ladenpreis",
+    "Lagerort",
+    "Lagerstand",
+    "Uebernehmen",
+    "Sortiment",
+    "Kategorie",
+    "EinliefererID",
+    "Angeliefert",
+    "Betriebsmittel",
+]
 
 
 def _rebuild_csv_export() -> None:
@@ -334,10 +302,11 @@ def _rebuild_csv_export() -> None:
             "Lagerort": d.get("lagerort", "") or "",
             "Lagerstand": d.get("lagerstand", 1) or 1,
             "Uebernehmen": d.get("uebernehmen", 1) or 1,
+            "Sortiment": d.get("sortiment", "") or "",
+            "Kategorie": d.get("kategorie", "") or "",
             "EinliefererID": d.get("einlieferer_id", d.get("einlieferer", "")) or "",
             "Angeliefert": d.get("angeliefert", "") or "",
             "Betriebsmittel": d.get("betriebsmittel", "") or "",
-            "Mitarbeiter": d.get("mitarbeiter", d.get("mitarbeiter_name","")) or "",
         })
 
     def _sort_key(r):
@@ -408,6 +377,7 @@ def _run_meta_once(artikelnr: str, img_path: Path) -> Tuple[Optional[Dict[str, A
 def _apply_ki_to_meta(mj: Dict[str, Any], meta: Dict[str, Any]) -> None:
     mj["titel"] = _normalize_title(meta.get("title", "")).strip()
     mj["beschreibung"] = meta.get("description", "").strip()
+    mj["kategorie"] = meta.get("category", "").strip()
 
     retail_f = float(meta.get("retail_price", 0.0) or 0.0)
     mj["retail_price"] = round(retail_f, 2)
@@ -470,7 +440,7 @@ def export_csv(from_nr: str | None = None, to_nr: str | None = None):
 
     # Kein Filter -> Datei direkt ausliefern
     if not from_nr and not to_nr:
-        return FileResponse(str(EXPORT_CSV), filename="artikel_export.csv", media_type="text/csv")
+        return FileResponse(str(EXPORT_CSV), filename="eartikel_export.csv", media_type="text/csv")
 
     # Filter -> in-memory CSV erzeugen
     def _in_range(n: str) -> bool:
@@ -502,24 +472,22 @@ def export_csv(from_nr: str | None = None, to_nr: str | None = None):
             str(int(meta.get("menge") or 1)),
             str(meta.get("titel") or ""),
             str(meta.get("beschreibung") or ""),
-            _format_rufpreis(meta.get("rufpreis", 0)),
-            _format_listenpreis(meta.get("listenpreis", "")),
+            _format_price_1dp(meta.get("rufpreis", 0)),
             str(meta.get("lagerort") or ""),
             str(int(meta.get("lagerstand") or 1)),
             str(int(meta.get("uebernehmen") or 1)),
             str(meta.get("einlieferer_id") or meta.get("einlieferer") or ""),
             str(meta.get("angeliefert") or ""),
             str(meta.get("betriebsmittel") or ""),
-            str(meta.get("mitarbeiter") or meta.get("mitarbeiter_name") or ""),
         ])
 
     bio = io.StringIO()
-    w = csv.writer(bio, delimiter=";", quotechar='"', quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
+    w = csv.writer(bio, delimiter=",", quotechar='"', quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
     w.writerow(CSV_HEADERS)
     for r in rows:
         w.writerow(r)
     content = ("\ufeff" + bio.getvalue()).encode("utf-8")
-    return Response(content, media_type="text/csv", headers={"Content-Disposition":"attachment; filename=artikel_export.csv"})
+    return Response(content, media_type="text/csv", headers={"Content-Disposition":"attachment; filename=eartikel_export.csv"})
 
 
 @app.get("/api/next_artikelnr")
@@ -663,6 +631,7 @@ def meta(artikelnr: str):
         "artikelnr": artikelnr,
         "titel": mj.get("titel", "") or "",
         "beschreibung": mj.get("beschreibung", "") or "",
+        "kategorie": mj.get("kategorie", "") or "",
         "retail_price": mj.get("retail_price", 0.0) or 0.0,
         "rufpreis": mj.get("rufpreis", 0.0) or 0.0,
         "lagerort": mj.get("lagerort", "") or "",
@@ -685,6 +654,7 @@ def save(data: Dict[str, Any]):
     mj = _load_meta_json(artikelnr)
 
     # Textfelder
+    for k in ["titel", "beschreibung", "lagerort", "einlieferer", "mitarbeiter", "kategorie"]:
         if k in data and data[k] is not None:
             mj[k] = str(data[k])
 
@@ -755,6 +725,7 @@ def describe(artikelnr: str):
             "ok": True,
             "title": mj["titel"],
             "description": mj["beschreibung"],
+            "category": mj.get("kategorie", ""),
             "retail_price": mj["retail_price"],
             "rufpreis": mj["rufpreis"],
             "ki_runtime_ms": runtime_ms,
@@ -809,6 +780,7 @@ def admin_articles(request: Request, category: str = "", only_failed: int = 0):
             continue
 
         nr = str(mj.get("artikelnr", p.stem))
+        cat = (mj.get("kategorie", "") or "").strip()
 
         if category and cat.lower() != category.strip().lower():
             continue
@@ -825,6 +797,7 @@ def admin_articles(request: Request, category: str = "", only_failed: int = 0):
             "artikelnr": nr,
             "titel": mj.get("titel", "") or "",
             "beschreibung": mj.get("beschreibung", "") or "",
+            "kategorie": cat,
             "retail_price": mj.get("retail_price", 0.0) or 0.0,
             "rufpreis": mj.get("rufpreis", 0.0) or 0.0,
             "reviewed": bool(mj.get("reviewed", False)),
