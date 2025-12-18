@@ -457,26 +457,28 @@ function setToken(t){
       window.location.href = url;
     });
   }
-  // Bilder ZIP Export Bereich (Von/Bis) – Admin-Token wird mitgeschickt
-  const btnExportImages = document.getElementById('btn-export-images');
-  if(btnExportImages){
-    btnExportImages.addEventListener('click', ()=>{
-      const a = exFrom ? String(exFrom.value||'').trim() : '';
-      const b = exTo ? String(exTo.value||'').trim() : '';
-      const params = new URLSearchParams();
-      if(a) params.set('from_nr', a);
-      if(b) params.set('to_nr', b);
-
-      const t = getToken ? String(getToken()||'').trim() : '';
-      if(t) params.set('token', t);
-
-      const url = '/api/images.zip' + (params.toString() ? ('?' + params.toString()) : '');
-      window.location.href = url;
-    });
-  }
 
 
 
+
+// Bilder ZIP Export Bereich (Von/Bis)
+const btnExportImages = document.getElementById('btn-export-images');
+if(btnExportImages){
+  btnExportImages.addEventListener('click', ()=>{
+    const a = exFrom ? String(exFrom.value||'').trim() : '';
+    const b = exTo ? String(exTo.value||'').trim() : '';
+    const params = new URLSearchParams();
+    if(a) params.set('from_nr', a);
+    if(b) params.set('to_nr', b);
+
+    // Admin Token als Query mitschicken (Server prüft token=...)
+    const t = getToken ? String(getToken()||'').trim() : '';
+    if(t) params.set('token', t);
+
+    const url = '/api/export_images.zip' + (params.toString() ? ('?' + params.toString()) : '');
+    window.location.href = url;
+  });
+}
   init();
 </script>
 </body>
