@@ -172,6 +172,7 @@
         <!-- (Listenpreis-Button ist rechts beim Preis-System) -->
 
         <div class="img-strip flex gap-2 overflow-x-auto pb-1" id="img-strip"></div>
+        <div id="cover-info" class="text-[11px] text-white/80 mt-1"></div>
 
         <div class="flex justify-end mt-2">
           <button id="btn-set-cover" type="button" class="btn btn-ghost text-xs hidden">⭐ Als Titelbild setzen</button>
@@ -247,6 +248,7 @@
   const fFile = document.getElementById('f-file');
   const thumb = document.getElementById('thumb');
   const imgStrip = document.getElementById('img-strip');
+  const coverInfo = document.getElementById('cover-info');
   const btnSetCover = document.getElementById('btn-set-cover');
 
   const fTitle = document.getElementById('f-title');
@@ -439,6 +441,7 @@
 
     const files = (j.files||[]);
     const cover = (j.cover||"").trim();
+    if(coverInfo){ coverInfo.textContent = cover ? ('⭐ Titelbild: ' + cover) : '⭐ Titelbild: (automatisch erstes Bild)'; }
 
     files.forEach((url, idx)=>{
       const img = document.createElement('img');
@@ -468,7 +471,8 @@
 
       if(isCover){
         // kleines Badge per outline (visuell leicht)
-        img.style.border = "2px solid rgba(239,68,68,.75)";
+        img.style.border = "2px solid rgba(255,215,0,.95)";
+        img.style.boxShadow = "0 0 0 2px rgba(0,0,0,.12), 0 10px 18px rgba(0,0,0,.18)";
       }
 
       imgStrip.appendChild(img);
@@ -480,6 +484,7 @@
       if(firstImg) firstImg.click();
     }else{
       thumb.innerHTML = `<div class="muted">Kein Foto</div>`;
+      if(coverInfo) coverInfo.textContent = "";
       if(btnSetCover) btnSetCover.classList.add("hidden");
     }
 

@@ -35,7 +35,7 @@ def _normalize_title(title: str) -> str:
 
 from pathlib import Path
 from PIL import Image, ImageOps
-import io, json, time, csv, math, os, datetime
+import io, json, time, csv, math, os, datetime, zipfile
 import re
 from typing import Any, Dict, Optional, Tuple
 
@@ -74,6 +74,24 @@ EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 EXPORT_CSV = EXPORT_DIR / "artikel_export.csv"
 
+
+
+# ----------------------------
+# Image helpers (stable ordering by numeric suffix)
+# ----------------------------
+def _img_index_from_name(name: str) -> int:
+    """Extract numeric suffix from filenames like 123456_0.jpg; fallback large number."""
+    try:
+        m = re.search(r"_(\d+)\.[a-zA-Z0-9]+$", str(name))
+        return int(m.group(1)) if m else 10**9
+    except Exception:
+        return 10**9
+
+def _sort_pic_key(p: Path):
+    return (_img_index_from_name(p.name), p.name)
+
+def _sorted_pics_for_art(artikelnr: str) -> list[Path]:
+    return sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"), key=_sort_pic_key)
 
 # ----------------------------
 # CSV Export helpers (UTF-8 BOM + schneller Update)
@@ -380,7 +398,7 @@ def _gdrive_backup_article(artikelnr: str) -> None:
         # Upload images for article (processed preferred, else raw)
         pics = sorted(PROCESSED_DIR.glob(f"{artikelnr}_*.jpg"))
         if not pics:
-            pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
+            pics = _sorted_pics_for_art(artikelnr)
         for p in pics:
             # determine index from suffix _N
             m = re.search(r"_(\d+)\.jpg$", p.name)
@@ -685,7 +703,7 @@ def _list_articles() -> list[dict]:
         created = int(mj.get("created_at", 0) or 0)
         updated = int(mj.get("updated_at", 0) or 0)
 
-        pics = sorted(RAW_DIR.glob(f"{nr}_*.jpg"))
+        pics = _sorted_pics_for_art(nr)
         img_url = ""
         if pics:
             rel = pics[-1].relative_to(BASE_DIR)
@@ -829,6 +847,85 @@ def export_csv(from_nr: str | None = None, to_nr: str | None = None):
     return Response(content, media_type="text/csv", headers={"Content-Disposition":"attachment; filename=artikel_export.csv"})
 
 
+
+@app.get("/api/images.zip")
+def export_images_zip(request: Request, from_nr: str | None = None, to_nr: str | None = None, prefer_processed: int = 1):
+    """Download images as ZIP (optionally filtered by Artikelnr range).
+
+    Usage:
+      /api/images.zip?from_nr=123458&to_nr=123480&token=...
+    Notes:
+      - Admin-Token geschützt (wie CSV Export im Admin).
+      - prefer_processed=1 versucht zuerst uploads/processed, sonst raw.
+    """
+    guard = _admin_guard(request)
+    if guard:
+        return guard
+
+    def _in_range(n: str) -> bool:
+        try:
+            ni = int(n)
+        except Exception:
+            return False
+        if from_nr:
+            try:
+                if ni < int(from_nr): 
+                    return False
+            except Exception:
+                pass
+        if to_nr:
+            try:
+                if ni > int(to_nr): 
+                    return False
+            except Exception:
+                pass
+        return True
+
+    # ZIP in-memory (für große Exporte ggf. später auf Streaming umstellbar)
+    bio = io.BytesIO()
+    with zipfile.ZipFile(bio, mode="w", compression=zipfile.ZIP_DEFLATED) as z:
+        # Artikelnummern anhand vorhandener Metadaten ermitteln (robust, weil JSON = Quelle der Wahrheit)
+        for jf in sorted(RAW_DIR.glob("*.json")):
+            art = jf.stem
+            if not _in_range(art):
+                continue
+
+            # Bilder sammeln
+            pics = _sorted_pics_for_art(art)
+            if prefer_processed:
+                # processed ist optional – wenn vorhanden, nimm die jeweilige processed Datei pro stem
+                proc = []
+                for p in pics:
+                    # processed kann unterschiedliche Endungen haben; wir nehmen jpg/png/webp "best-effort"
+                    stem = p.stem
+                    cand = sorted(PROCESSED_DIR.glob(stem + ".*"))
+                    if cand:
+                        proc.append(cand[0])
+                    else:
+                        proc.append(p)
+                pics_to_zip = proc
+            else:
+                pics_to_zip = pics
+
+            for p in pics_to_zip:
+                try:
+                    # Name im ZIP: <Artikelnr>_<idx>.<ext>
+                    idxn = _img_index_from_name(p.name)
+                    ext = p.suffix.lower() or ".jpg"
+                    arcname = f"{art}_{idxn}{ext}"
+                    z.writestr(arcname, p.read_bytes())
+                except Exception:
+                    # nie abbrechen wegen 1 Datei
+                    continue
+
+    bio.seek(0)
+    return Response(
+        bio.getvalue(),
+        media_type="application/zip",
+        headers={"Content-Disposition": "attachment; filename=artikel_bilder.zip"},
+    )
+
+
 @app.get("/api/next_artikelnr")
 def next_artikelnr():
     max_nr = 0
@@ -868,7 +965,7 @@ async def upload(
     except Exception as e:
         return JSONResponse({"ok": False, "error": f"Ungültiges Bild: {e}"}, status_code=400)
 
-    existing = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
+    existing = _sorted_pics_for_art(artikelnr)
     idx = int(existing[-1].stem.split("_")[-1]) + 1 if existing else 0
     out = RAW_DIR / f"{artikelnr}_{idx}.jpg"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -897,7 +994,7 @@ def images(artikelnr: str):
     cover = str(meta.get("cover") or "").strip()
 
     files = []
-    for f in sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg")):
+    for f in _sorted_pics_for_art(artikelnr):
         rel = f.relative_to(BASE_DIR)
         files.append("/static/" + str(rel).replace("\\", "/"))
 
@@ -938,7 +1035,7 @@ def delete_last_image(data: Dict[str, Any]):
     if not artikelnr:
         return JSONResponse({"ok": False, "error": "Artikelnummer fehlt"}, status_code=400)
 
-    files = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
+    files = _sorted_pics_for_art(artikelnr)
     if not files:
         return JSONResponse({"ok": False, "error": "Keine Bilder vorhanden"}, status_code=404)
 
@@ -1006,12 +1103,17 @@ def delete_image(payload: Dict[str, Any]):
 
     # meta updaten: last_image + cover korrekt setzen
     mj = _load_meta_json(artikelnr)
-    pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
+    pics = _sorted_pics_for_art(artikelnr)
 
+    # last_image = "letztes" Bild nach stabiler (numerischer) Sortierung
     mj["last_image"] = pics[-1].name if pics else ""
 
-    # wenn gelöschtes Bild Titelbild war -> neues Titelbild setzen (erstes verbleibendes, sonst leer)
-    if str(mj.get("cover", "")).strip() == filename:
+    cur_cover = str(mj.get("cover", "") or "").strip()
+
+    # Cover reparieren, wenn:
+    # - das gelöschte Bild das Cover war ODER
+    # - Cover auf eine Datei zeigt, die es nicht mehr gibt
+    if cur_cover == filename or (cur_cover and not (RAW_DIR / cur_cover).exists()):
         mj["cover"] = pics[0].name if pics else ""
 
     _save_meta_json(artikelnr, mj)
@@ -1026,7 +1128,7 @@ def meta(artikelnr: str):
     artikelnr = str(artikelnr).strip()
     mj = _load_meta_json(artikelnr)
 
-    pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
+    pics = _sorted_pics_for_art(artikelnr)
     img_url = ""
     if pics:
         rel = pics[-1].relative_to(BASE_DIR)
@@ -1107,7 +1209,7 @@ def save(data: Dict[str, Any]):
 @app.get("/api/describe")
 def describe(artikelnr: str):
     artikelnr = str(artikelnr).strip()
-    pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
+    pics = _sorted_pics_for_art(artikelnr)
     if not pics:
         return JSONResponse({"ok": False, "error": "Kein Bild für diese Artikelnummer gefunden."}, status_code=400)
 
@@ -1255,7 +1357,7 @@ def admin_articles(request: Request, sortiment: str = "", only_failed: int = 0):
         if only_failed and (mj.get("ki_source") != "failed"):
             continue
 
-        pics = sorted(RAW_DIR.glob(f"{nr}_*.jpg"))
+        pics = _sorted_pics_for_art(nr)
         img_url = ""
         if pics:
             rel = pics[-1].relative_to(BASE_DIR)

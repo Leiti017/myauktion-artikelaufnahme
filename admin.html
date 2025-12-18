@@ -68,6 +68,7 @@
     </div>
     <div class="flex items-end gap-2">
       <button id="btn-export-range" class="btn btn-primary w-full sm:w-auto" type="button">CSV exportieren</button>
+      <button id="btn-export-images" class="btn btn-primary w-full sm:w-auto" type="button">Bilder ZIP</button>
     </div>
   </div>
   <div class="text-[11px] opacity-70 mt-2">Leer lassen = kompletter Export.</div>
@@ -456,6 +457,24 @@ function setToken(t){
       window.location.href = url;
     });
   }
+  // Bilder ZIP Export Bereich (Von/Bis) – Admin-Token wird mitgeschickt
+  const btnExportImages = document.getElementById('btn-export-images');
+  if(btnExportImages){
+    btnExportImages.addEventListener('click', ()=>{
+      const a = exFrom ? String(exFrom.value||'').trim() : '';
+      const b = exTo ? String(exTo.value||'').trim() : '';
+      const params = new URLSearchParams();
+      if(a) params.set('from_nr', a);
+      if(b) params.set('to_nr', b);
+
+      const t = getToken ? String(getToken()||'').trim() : '';
+      if(t) params.set('token', t);
+
+      const url = '/api/images.zip' + (params.toString() ? ('?' + params.toString()) : '');
+      window.location.href = url;
+    });
+  }
+
 
 
   init();
