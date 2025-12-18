@@ -570,9 +570,7 @@
   const hasSelected = !!(selectedFilename && selectedFilename.trim());
 
   const msg = hasSelected
-    ? ("Ausgewähltes Foto wirklich löschen?
-
-" + selectedFilename)
+    ? ("Ausgewähltes Foto wirklich löschen?\\n\\n" + selectedFilename)
     : "Letztes Foto wirklich löschen?";
 
   if(!confirm(msg)) return;
