@@ -163,7 +163,9 @@
           </div>
         </div>
 
-        <input id="f-file" type="file" accept="image/*" capture="environment" class="hidden">
+        <input id="f-file-camera" type="file" accept="image/*" capture="environment" class="hidden">
+
+        <input id="f-file-local" type="file" accept="image/*" class="hidden">
 
         <div class="thumb mb-2" id="thumb">
           <span class="text-xs text-white/70 text-center">Tippen, um Foto aufzunehmen / auszuwählen</span>
@@ -245,7 +247,8 @@
   const fLager = document.getElementById('f-lagerort');
   const fMenge = document.getElementById('f-menge');
 
-  const fFile = document.getElementById('f-file');
+  const fFileCamera = document.getElementById('f-file-camera');
+  const fFileLocal = document.getElementById('f-file-local');
   const thumb = document.getElementById('thumb');
   const imgStrip = document.getElementById('img-strip');
   const coverLabel = document.getElementById('cover-label');
@@ -549,8 +552,10 @@
     }
   }
 
-  btnPhoto.onclick = ()=> fFile.click();
-  thumb.onclick = ()=> fFile.click();
+  // Foto auswählen (lokaler Ordner/Galerie) nur über Button
+  btnPhoto.onclick = ()=> fFileLocal.click();
+  // Foto machen (Kamera) nur über Tippen auf das Vorschau-Feld
+  thumb.onclick = ()=> fFileCamera.click();
 
   fArt.addEventListener('input', updateArtnrHint);
   fMenge.addEventListener('change', ()=>{});
@@ -605,14 +610,14 @@
 };
 
 
-  fFile.addEventListener('change', async ()=>{
+  async function handleSelectedFile(file){
     if(!validArtNr()){
       alert("Artikelnummer muss mindestens 6-stellig sein.");
-      fFile.value = "";
+      if(fFileCamera) fFileCamera.value = "";
+      if(fFileLocal) fFileLocal.value = "";
       return;
     }
     const art = (fArt.value||"").trim();
-    const file = fFile.files[0];
     if(!file) return;
 
     const reader = new FileReader();
@@ -638,7 +643,24 @@
     toast("Foto hochgeladen");
     await refreshImages();
     await pollUntilDone(art, 18000);
-  });
+  }
+
+  if(fFileCamera){
+    fFileCamera.addEventListener('change', async ()=>{
+      const file = fFileCamera.files[0];
+      // wichtig: danach resetten, damit gleiches Foto nochmal auswählbar ist
+      fFileCamera.value = "";
+      await handleSelectedFile(file);
+    });
+  }
+
+  if(fFileLocal){
+    fFileLocal.addEventListener('change', async ()=>{
+      const file = fFileLocal.files[0];
+      fFileLocal.value = "";
+      await handleSelectedFile(file);
+    });
+  }
 
   btnDescribe.onclick = async ()=>{
     if(!validArtNr()) return alert("Artikelnummer muss mindestens 6-stellig sein.");
@@ -668,7 +690,8 @@
     // Reset UI for next item (keep Lagerort + Settings)
     thumb.innerHTML = '<span class="text-xs text-white/70 text-center">Tippen, um Foto aufzunehmen / auszuwählen</span>';
     imgStrip.innerHTML = "";
-    fFile.value = "";
+    if(fFileCamera) fFileCamera.value = "";
+    if(fFileLocal) fFileLocal.value = "";
     fTitle.value = "";
     fDesc.value = "";
     fRetail.value = "";
