@@ -728,7 +728,7 @@ def articles_page():
     return FileResponse(str(BASE_DIR / "articles.html"))
 
 
-@app.get("/api/health")
+@app.api_route("/api/health", methods=["GET", "HEAD"])
 def health():
     return {"ok": True}
 
