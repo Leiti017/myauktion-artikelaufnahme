@@ -35,7 +35,7 @@ def _normalize_title(title: str) -> str:
 
 from pathlib import Path
 from PIL import Image, ImageOps
-import io, json, time, csv, math, os, datetime, zipfile
+import io, json, time, csv, math, os, datetime, zipfile, hashlib, threading
 import re
 from typing import Any, Dict, Optional, Tuple
 
@@ -105,21 +105,32 @@ def _next_image_path(artikelnr: str) -> Path:
     """Return next image path using scheme:
     - if <art>.jpg missing -> that is next (titelbild)
     - else -> <art>_1.jpg, <art>_2.jpg ... next free index
+
+    NOTE: Older versions had a bug where the next index was computed wrong and
+    could overwrite <art>_1.jpg repeatedly. This implementation is correct and stable.
     """
     art = str(artikelnr).strip()
     _migrate_legacy_zero(art)
     _migrate_bad_suffixes(art)
+
     main = RAW_DIR / f"{art}.jpg"
     if not main.exists():
         return main
 
-    existing = _list_image_paths(art)
-    max_idx = 0
-    for p in existing:
-        k = _img_sort_key(p, art)  # 0 for main, N for _N
-        if k is not None and isinstance(k, int) and k > max_idx and k < 999999:
-            max_idx = k
-    next_idx = max(max_idx, 0) + 1
+    pics = _list_image_paths(art)
+    nums: list[int] = []
+    for p in pics:
+        if p.name == f"{art}.jpg":
+            nums.append(0)
+            continue
+        m = re.match(rf"^{re.escape(art)}_(\d+)\.jpg$", p.name, flags=re.I)
+        if m:
+            try:
+                nums.append(int(m.group(1)))
+            except Exception:
+                pass
+
+    next_idx = (max(nums) + 1) if nums else 1
     return RAW_DIR / f"{art}_{next_idx}.jpg"
 
 
@@ -353,6 +364,25 @@ USAGE_JSON = EXPORT_DIR / "ki_usage.json"
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "").strip()  # leer => Admin offen (nur für Tests)
 DEFAULT_BUDGET_EUR = float((os.getenv("KI_BUDGET_EUR", "10") or "10").replace(",", "."))
 COST_PER_SUCCESS_CALL_EUR = float((os.getenv("KI_COST_PER_SUCCESS_CALL_EUR", "0.003") or "0.003").replace(",", "."))
+# ----------------------------
+# Save de-duplication (prevents accidental double-click saves)
+# - In-memory per process (fast, no DB needed)
+# - If the same payload for the same artikelnr arrives within 2 seconds, we short-circuit.
+# ----------------------------
+_SAVE_DEDUP: dict[str, tuple[float, str]] = {}
+_SAVE_DEDUP_LOCK = threading.Lock()
+
+def _payload_hash(data: Dict[str, Any]) -> str:
+    try:
+        # Stable hashing; ignore fields that can vary without meaning
+        d = dict(data or {})
+        d.pop("reviewed", None)
+        s = json.dumps(d, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha1(s.encode("utf-8")).hexdigest()
+    except Exception:
+        return str(time.time())
+
+
 
 app.mount("/static", StaticFiles(directory=str(BASE_DIR)), name="static")
 
@@ -1288,6 +1318,19 @@ def save(data: Dict[str, Any]):
     _migrate_bad_suffixes(artikelnr)
     if not artikelnr:
         return JSONResponse({"ok": False, "error": "Artikelnummer fehlt"}, status_code=400)
+
+
+# De-dup: same payload within short window -> ignore (prevents double-click duplicates)
+try:
+    h = _payload_hash(data)
+    now = time.time()
+    with _SAVE_DEDUP_LOCK:
+        prev = _SAVE_DEDUP.get(artikelnr)
+        if prev and prev[1] == h and (now - prev[0]) < 2.0:
+            return {"ok": True, "dedup": True}
+        _SAVE_DEDUP[artikelnr] = (now, h)
+except Exception:
+    pass
 
     mj = _load_meta_json(artikelnr)
 
