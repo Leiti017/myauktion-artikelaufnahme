@@ -76,24 +76,6 @@ EXPORT_CSV = EXPORT_DIR / "artikel_export.csv"
 
 
 # ----------------------------
-# Image helpers (stable numeric sort)
-# ----------------------------
-def _img_index_from_name(name: str) -> int:
-    # expects ..._<n>.jpg
-    try:
-        m = re.search(r"_(\d+)\.jpg$", name)
-        return int(m.group(1)) if m else 0
-    except Exception:
-        return 0
-
-def _sorted_raw_images(artikelnr: str) -> list[Path]:
-    pics = list(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
-    # numeric by suffix, then name (stable)
-    pics.sort(key=lambda p: (_img_index_from_name(p.name), p.name))
-    return pics
-
-
-# ----------------------------
 # CSV Export helpers (UTF-8 BOM + schneller Update)
 # ----------------------------
 CSV_FIELDS = [
@@ -398,7 +380,7 @@ def _gdrive_backup_article(artikelnr: str) -> None:
         # Upload images for article (processed preferred, else raw)
         pics = sorted(PROCESSED_DIR.glob(f"{artikelnr}_*.jpg"))
         if not pics:
-            pics = _sorted_raw_images(artikelnr)
+            pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
         for p in pics:
             # determine index from suffix _N
             m = re.search(r"_(\d+)\.jpg$", p.name)
@@ -703,7 +685,7 @@ def _list_articles() -> list[dict]:
         created = int(mj.get("created_at", 0) or 0)
         updated = int(mj.get("updated_at", 0) or 0)
 
-        pics = _sorted_raw_images(nr)
+        pics = sorted(RAW_DIR.glob(f"{nr}_*.jpg"))
         img_url = ""
         if pics:
             rel = pics[-1].relative_to(BASE_DIR)
@@ -847,62 +829,6 @@ def export_csv(from_nr: str | None = None, to_nr: str | None = None):
     return Response(content, media_type="text/csv", headers={"Content-Disposition":"attachment; filename=artikel_export.csv"})
 
 
-
-
-@app.get("/api/export_images.zip")
-def export_images_zip(request: Request, from_nr: str | None = None, to_nr: str | None = None):
-    """Export all article images as a ZIP. Optional range:
-      /api/export_images.zip?from_nr=123458&to_nr=123480
-
-    Admin-token protected (same as other admin endpoints).
-    """
-    guard = _admin_guard(request)
-    if guard:
-        return guard
-
-    def _in_range(n: str) -> bool:
-        try:
-            ni = int(n)
-        except Exception:
-            return False
-        if from_nr:
-            try:
-                if ni < int(from_nr): return False
-            except Exception:
-                pass
-        if to_nr:
-            try:
-                if ni > int(to_nr): return False
-            except Exception:
-                pass
-        return True
-
-    import io, zipfile
-
-    bio = io.BytesIO()
-    with zipfile.ZipFile(bio, mode="w", compression=zipfile.ZIP_DEFLATED) as z:
-        # iterate articles by json files (ensures range works even if some images missing)
-        for jf in sorted(RAW_DIR.glob("*.json")):
-            art = jf.stem
-            if not _in_range(art):
-                continue
-            pics = _sorted_raw_images(art)
-            for p in pics:
-                # keep nice structure inside zip
-                arcname = f"{art}/{p.name}"
-                try:
-                    z.writestr(arcname, p.read_bytes())
-                except Exception:
-                    pass
-
-    bio.seek(0)
-    content = bio.getvalue()
-    return Response(
-        content,
-        media_type="application/zip",
-        headers={"Content-Disposition": "attachment; filename=artikel_bilder.zip"},
-    )
-
 @app.get("/api/next_artikelnr")
 def next_artikelnr():
     max_nr = 0
@@ -971,7 +897,7 @@ def images(artikelnr: str):
     cover = str(meta.get("cover") or "").strip()
 
     files = []
-    for f in _sorted_raw_images(artikelnr):
+    for f in sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg")):
         rel = f.relative_to(BASE_DIR)
         files.append("/static/" + str(rel).replace("\\", "/"))
 
@@ -1012,7 +938,7 @@ def delete_last_image(data: Dict[str, Any]):
     if not artikelnr:
         return JSONResponse({"ok": False, "error": "Artikelnummer fehlt"}, status_code=400)
 
-    files = _sorted_raw_images(artikelnr)
+    files = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
     if not files:
         return JSONResponse({"ok": False, "error": "Keine Bilder vorhanden"}, status_code=404)
 
@@ -1080,18 +1006,13 @@ def delete_image(payload: Dict[str, Any]):
 
     # meta updaten: last_image + cover korrekt setzen
     mj = _load_meta_json(artikelnr)
-    pics = _sorted_raw_images(artikelnr)
+    pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
 
     mj["last_image"] = pics[-1].name if pics else ""
 
-    # Wenn gelöschtes Bild Titelbild war -> neues Titelbild setzen (erstes verbleibendes, sonst leer)
+    # wenn gelöschtes Bild Titelbild war -> neues Titelbild setzen (erstes verbleibendes, sonst leer)
     if str(mj.get("cover", "")).strip() == filename:
         mj["cover"] = pics[0].name if pics else ""
-
-    # Falls cover auf eine nicht mehr existierende Datei zeigt -> reparieren
-    if mj.get("cover"):
-        if not (RAW_DIR / str(mj["cover"])).exists():
-            mj["cover"] = pics[0].name if pics else ""
 
     _save_meta_json(artikelnr, mj)
 
@@ -1100,12 +1021,56 @@ def delete_image(payload: Dict[str, Any]):
 
 
 
+
+@app.post("/api/delete_article")
+def delete_article(data: Dict[str, Any]):
+    """Löscht eine komplette Position (Meta + alle Bilder)."""
+    artikelnr = str((data or {}).get("artikelnr", "")).strip()
+    if not artikelnr:
+        return JSONResponse({"ok": False, "error": "Artikelnummer fehlt"}, status_code=400)
+
+    deleted_imgs = 0
+    # Bilder löschen (raw + processed)
+    for p in list(RAW_DIR.glob(f"{artikelnr}_*.jpg")):
+        try:
+            p.unlink()
+            deleted_imgs += 1
+        except Exception:
+            pass
+        # processed best-effort
+        try:
+            stem = p.stem
+            for pf in PROCESSED_DIR.glob(stem + ".*"):
+                try:
+                    pf.unlink()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    # Meta JSON löschen
+    mp = _meta_path(artikelnr)
+    if mp.exists():
+        try:
+            mp.unlink()
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": f"Konnte Meta nicht löschen: {e}"}, status_code=500)
+
+    # Export aktualisieren
+    try:
+        _rebuild_csv_export()
+    except Exception:
+        pass
+
+    return {"ok": True, "deleted": artikelnr, "deleted_images": deleted_imgs}
+
+
 @app.get("/api/meta")
 def meta(artikelnr: str):
     artikelnr = str(artikelnr).strip()
     mj = _load_meta_json(artikelnr)
 
-    pics = _sorted_raw_images(artikelnr)
+    pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
     img_url = ""
     if pics:
         rel = pics[-1].relative_to(BASE_DIR)
@@ -1186,7 +1151,7 @@ def save(data: Dict[str, Any]):
 @app.get("/api/describe")
 def describe(artikelnr: str):
     artikelnr = str(artikelnr).strip()
-    pics = _sorted_raw_images(artikelnr)
+    pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
     if not pics:
         return JSONResponse({"ok": False, "error": "Kein Bild für diese Artikelnummer gefunden."}, status_code=400)
 
@@ -1334,7 +1299,7 @@ def admin_articles(request: Request, sortiment: str = "", only_failed: int = 0):
         if only_failed and (mj.get("ki_source") != "failed"):
             continue
 
-        pics = _sorted_raw_images(nr)
+        pics = sorted(RAW_DIR.glob(f"{nr}_*.jpg"))
         img_url = ""
         if pics:
             rel = pics[-1].relative_to(BASE_DIR)

@@ -192,7 +192,11 @@
           <button id="btn-save" class="btn btn-ghost text-sm">
             <i data-lucide="save" class="w-4 h-4"></i> Artikel speichern
           </button>
-        </div>
+        
+          <button id="btn-delete-article" class="btn btn-danger text-sm hidden">
+            <i data-lucide="trash" class="w-4 h-4"></i> Position löschen
+          </button>
+</div>
 
         <div class="mt-3">
           <div id="status-pill" class="pill hidden"><span class="dot"></span><span id="status-pill-text">KI läuft…</span></div>
@@ -262,6 +266,7 @@
   const btnPhoto = document.getElementById('btn-photo');
   const btnDeletePhoto = document.getElementById('btn-delete-photo');
   const btnSave = document.getElementById('btn-save');
+const btnDeleteArticle = document.getElementById('btn-delete-article');
   const btnDescribe = document.getElementById('btn-describe');
   const btnPriceToggle = document.getElementById('btn-price-toggle');
   const btnToggleRetail = document.getElementById('btn-toggle-retail');
@@ -488,6 +493,7 @@
     }else{
       thumb.innerHTML = `<div class="muted">Kein Foto</div>`;
       if(btnSetCover) btnSetCover.classList.add("hidden");
+    if(btnDeleteArticle) btnDeleteArticle.classList.add('hidden');
     }
 
     if(btnSetCover){
@@ -766,6 +772,38 @@
     }catch(e){}
 
     goNextArticle();
+
+  if(btnDeleteArticle){
+    btnDeleteArticle.onclick = async ()=>{
+      if(!validArtNr()) return alert("Artikelnummer muss mindestens 6-stellig sein.");
+      const art = (fArt.value||"").trim();
+      if(!art) return;
+
+      const msg = selectedFilename
+        ? ("Diese Position wirklich löschen?\n\nArtikelNr: " + art + "\nAusgewähltes Foto bleibt NICHT erhalten.")
+        : ("Diese Position wirklich löschen?\n\nArtikelNr: " + art);
+
+      if(!confirm(msg)) return;
+
+      const res = await fetch('/api/delete_article', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({artikelnr: art})
+      });
+      const j = await res.json();
+      if(!res.ok || !j.ok){
+        alert("Position löschen Fehler: " + (j.error || res.status));
+        return;
+      }
+
+      toast("Position gelöscht");
+      log("Position gelöscht: " + art);
+
+      // Zurück in Normalmodus (ohne ?edit=)
+      try{ window.location.href = "/"; }catch(e){ goNextArticle(); }
+    };
+  }
+
 };
 
   window.addEventListener('DOMContentLoaded', ()=>{
@@ -802,6 +840,7 @@
         refreshImages();
         refreshMeta();
         toast("Bearbeiten: " + editId);
+        if(btnDeleteArticle) btnDeleteArticle.classList.remove('hidden');
       }
     }catch(e){}
 
