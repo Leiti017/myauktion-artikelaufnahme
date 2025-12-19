@@ -76,6 +76,73 @@ EXPORT_CSV = EXPORT_DIR / "artikel_export.csv"
 
 
 # ----------------------------
+# Image filename scheme + stable ordering
+# Titelbild: <artikelnr>.jpg
+# weitere:   <artikelnr>_1.jpg, <artikelnr>_2.jpg, ...
+# ----------------------------
+def _img_sort_key(p: Path, artikelnr: str) -> tuple[int, int, str]:
+    """Stable sort: titelbild first, then numeric suffix."""
+    name = p.name
+    if name == f"{artikelnr}.jpg":
+        return (0, 0, name)
+    m = re.match(rf"^{re.escape(artikelnr)}_(\d+)\.jpg$", name, flags=re.I)
+    if m:
+        try:
+            return (1, int(m.group(1)), name)
+        except Exception:
+            return (1, 0, name)
+    return (2, 0, name)
+
+def _list_image_paths(artikelnr: str, directory: Path = None) -> list[Path]:
+    """List all jpg images for an article in stable order."""
+    directory = directory or RAW_DIR
+    paths = list(directory.glob(f"{artikelnr}*.jpg"))
+    paths.sort(key=lambda p: _img_sort_key(p, str(artikelnr)))
+    return paths
+
+
+def _migrate_legacy_zero(artikelnr: str) -> None:
+    """Legacy support: if <artikelnr>_0.jpg exists but <artikelnr>.jpg not, rename to titelbild."""
+    try:
+        artikelnr = str(artikelnr)
+        legacy = RAW_DIR / f"{artikelnr}_0.jpg"
+        new = RAW_DIR / f"{artikelnr}.jpg"
+        if legacy.exists() and not new.exists():
+            legacy.rename(new)
+
+            # processed best-effort
+            try:
+                legacy_stem = legacy.stem
+                new_stem = new.stem
+                for pf in PROCESSED_DIR.glob(legacy_stem + ".*"):
+                    try:
+                        pf.rename(PROCESSED_DIR / (new_stem + pf.suffix))
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            # meta update best-effort
+            try:
+                mj = _load_meta_json(artikelnr)
+                if str(mj.get("cover", "")).strip() == legacy.name:
+                    mj["cover"] = new.name
+                if str(mj.get("last_image", "")).strip() == legacy.name:
+                    mj["last_image"] = new.name
+                _save_meta_json(artikelnr, mj)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+def _is_valid_article_image_name(artikelnr: str, filename: str) -> bool:
+    """Allow <artikelnr>.jpg and <artikelnr>_N.jpg only."""
+    if filename == f"{artikelnr}.jpg":
+        return True
+    return bool(re.match(rf"^{re.escape(artikelnr)}_(\d+)\.jpg$", filename, flags=re.I))
+
+
+# ----------------------------
 # CSV Export helpers (UTF-8 BOM + schneller Update)
 # ----------------------------
 CSV_FIELDS = [
@@ -378,14 +445,11 @@ def _gdrive_backup_article(artikelnr: str) -> None:
         _gdrive_upload_bytes(token, folder_id, daily_name, csv_bytes, "text/csv")
 
         # Upload images for article (processed preferred, else raw)
-        pics = sorted(PROCESSED_DIR.glob(f"{artikelnr}_*.jpg"))
+        pics = _list_image_paths(artikelnr, PROCESSED_DIR)
         if not pics:
-            pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
+            pics = _list_image_paths(artikelnr, RAW_DIR)
         for p in pics:
-            # determine index from suffix _N
-            m = re.search(r"_(\d+)\.jpg$", p.name)
-            idx = m.group(1) if m else "1"
-            gname = f"{artikelnr}_{idx}.jpg"
+            gname = p.name
             _gdrive_upload_bytes(token, folder_id, gname, p.read_bytes(), "image/jpeg")
     except Exception:
         # Backup darf nie das Speichern blockieren
@@ -685,7 +749,7 @@ def _list_articles() -> list[dict]:
         created = int(mj.get("created_at", 0) or 0)
         updated = int(mj.get("updated_at", 0) or 0)
 
-        pics = sorted(RAW_DIR.glob(f"{nr}_*.jpg"))
+        pics = _list_image_paths(nr)
         img_url = ""
         if pics:
             rel = pics[-1].relative_to(BASE_DIR)
@@ -728,7 +792,7 @@ def articles_page():
     return FileResponse(str(BASE_DIR / "articles.html"))
 
 
-@app.api_route("/api/health", methods=["GET", "HEAD"])
+@app.get("/api/health")
 def health():
     return {"ok": True}
 
@@ -845,7 +909,7 @@ def next_artikelnr():
 @app.get("/api/check_artnr")
 def check_artnr(artikelnr: str):
     artikelnr = str(artikelnr).strip()
-    exists = _meta_path(artikelnr).exists() or any(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
+    exists = _meta_path(artikelnr).exists() or any(RAW_DIR.glob(f"{artikelnr}*.jpg"))
     return {"ok": True, "exists": bool(exists)}
 
 
@@ -856,6 +920,7 @@ async def upload(
     background_tasks: BackgroundTasks = None,
 ):
     artikelnr = str(artikelnr).strip()
+    _migrate_legacy_zero(artikelnr)
     data = await file.read()
 
     try:
@@ -868,7 +933,7 @@ async def upload(
     except Exception as e:
         return JSONResponse({"ok": False, "error": f"Ungültiges Bild: {e}"}, status_code=400)
 
-    existing = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
+    existing = _list_image_paths(artikelnr)
     idx = int(existing[-1].stem.split("_")[-1]) + 1 if existing else 0
     out = RAW_DIR / f"{artikelnr}_{idx}.jpg"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -893,11 +958,12 @@ async def upload(
 @app.get("/api/images")
 def images(artikelnr: str):
     artikelnr = str(artikelnr).strip()
+    _migrate_legacy_zero(artikelnr)
     meta = _load_meta_json(artikelnr)
     cover = str(meta.get("cover") or "").strip()
 
     files = []
-    for f in sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg")):
+    for f in _list_image_paths(artikelnr):
         rel = f.relative_to(BASE_DIR)
         files.append("/static/" + str(rel).replace("\\", "/"))
 
@@ -910,6 +976,7 @@ def images(artikelnr: str):
 @app.post("/api/set_cover")
 def set_cover(payload: Dict[str, Any]):
     artikelnr = str(payload.get("artikelnr", "")).strip()
+    _migrate_legacy_zero(artikelnr)
     filename = str(payload.get("filename", "") or payload.get("file", "") or payload.get("url", "")).strip()
     if "/" in filename:
         filename = filename.split("/")[-1]
@@ -935,10 +1002,11 @@ def set_cover(payload: Dict[str, Any]):
 @app.post("/api/delete_last_image")
 def delete_last_image(data: Dict[str, Any]):
     artikelnr = str(data.get("artikelnr", "")).strip()
+    _migrate_legacy_zero(artikelnr)
     if not artikelnr:
         return JSONResponse({"ok": False, "error": "Artikelnummer fehlt"}, status_code=400)
 
-    files = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
+    files = _list_image_paths(artikelnr)
     if not files:
         return JSONResponse({"ok": False, "error": "Keine Bilder vorhanden"}, status_code=404)
 
@@ -957,17 +1025,23 @@ def delete_last_image(data: Dict[str, Any]):
     except Exception:
         pass
 
-    # meta last_image aktualisieren
+    # meta last_image + cover aktualisieren
     mj = _load_meta_json(artikelnr)
-    mj["last_image"] = files[-2].name if len(files) >= 2 else ""
+    remaining = _list_image_paths(artikelnr)
+    mj["last_image"] = remaining[-1].name if remaining else ""
+    if str(mj.get("cover", "")).strip() == target.name:
+        mj["cover"] = remaining[0].name if remaining else ""
     _save_meta_json(artikelnr, mj)
 
+    _rebuild_csv_export()
     return {"ok": True, "deleted": target.name}
+
 
 
 @app.post("/api/delete_image")
 def delete_image(payload: Dict[str, Any]):
     artikelnr = str(payload.get("artikelnr", "")).strip()
+    _migrate_legacy_zero(artikelnr)
     filename = str(payload.get("filename", "") or payload.get("name","") or payload.get("file","") or payload.get("url","")).strip()
 
     # falls URL: nur basename nehmen
@@ -980,8 +1054,9 @@ def delete_image(payload: Dict[str, Any]):
         return JSONResponse({"ok": False, "error": "artikelnr/filename fehlt"}, status_code=400)
 
     # Sicherheitscheck: nur Dateien dieses Artikels erlauben
-    if not filename.startswith(f"{artikelnr}_") or not filename.lower().endswith(".jpg"):
+    if not filename.lower().endswith(".jpg") or not _is_valid_article_image_name(artikelnr, filename):
         return JSONResponse({"ok": False, "error": "ungültiger Dateiname"}, status_code=400)
+
 
     path = RAW_DIR / filename
     if not path.exists():
@@ -1006,7 +1081,7 @@ def delete_image(payload: Dict[str, Any]):
 
     # meta updaten: last_image + cover korrekt setzen
     mj = _load_meta_json(artikelnr)
-    pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
+    pics = _list_image_paths(artikelnr)
 
     mj["last_image"] = pics[-1].name if pics else ""
 
@@ -1021,56 +1096,13 @@ def delete_image(payload: Dict[str, Any]):
 
 
 
-
-@app.post("/api/delete_article")
-def delete_article(data: Dict[str, Any]):
-    """Löscht eine komplette Position (Meta + alle Bilder)."""
-    artikelnr = str((data or {}).get("artikelnr", "")).strip()
-    if not artikelnr:
-        return JSONResponse({"ok": False, "error": "Artikelnummer fehlt"}, status_code=400)
-
-    deleted_imgs = 0
-    # Bilder löschen (raw + processed)
-    for p in list(RAW_DIR.glob(f"{artikelnr}_*.jpg")):
-        try:
-            p.unlink()
-            deleted_imgs += 1
-        except Exception:
-            pass
-        # processed best-effort
-        try:
-            stem = p.stem
-            for pf in PROCESSED_DIR.glob(stem + ".*"):
-                try:
-                    pf.unlink()
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
-    # Meta JSON löschen
-    mp = _meta_path(artikelnr)
-    if mp.exists():
-        try:
-            mp.unlink()
-        except Exception as e:
-            return JSONResponse({"ok": False, "error": f"Konnte Meta nicht löschen: {e}"}, status_code=500)
-
-    # Export aktualisieren
-    try:
-        _rebuild_csv_export()
-    except Exception:
-        pass
-
-    return {"ok": True, "deleted": artikelnr, "deleted_images": deleted_imgs}
-
-
 @app.get("/api/meta")
 def meta(artikelnr: str):
     artikelnr = str(artikelnr).strip()
+    _migrate_legacy_zero(artikelnr)
     mj = _load_meta_json(artikelnr)
 
-    pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
+    pics = _list_image_paths(artikelnr)
     img_url = ""
     if pics:
         rel = pics[-1].relative_to(BASE_DIR)
@@ -1099,6 +1131,7 @@ def meta(artikelnr: str):
 @app.post("/api/save")
 def save(data: Dict[str, Any]):
     artikelnr = str(data.get("artikelnr", "")).strip()
+    _migrate_legacy_zero(artikelnr)
     if not artikelnr:
         return JSONResponse({"ok": False, "error": "Artikelnummer fehlt"}, status_code=400)
 
@@ -1151,7 +1184,8 @@ def save(data: Dict[str, Any]):
 @app.get("/api/describe")
 def describe(artikelnr: str):
     artikelnr = str(artikelnr).strip()
-    pics = sorted(RAW_DIR.glob(f"{artikelnr}_*.jpg"))
+    _migrate_legacy_zero(artikelnr)
+    pics = _list_image_paths(artikelnr)
     if not pics:
         return JSONResponse({"ok": False, "error": "Kein Bild für diese Artikelnummer gefunden."}, status_code=400)
 
@@ -1299,7 +1333,7 @@ def admin_articles(request: Request, sortiment: str = "", only_failed: int = 0):
         if only_failed and (mj.get("ki_source") != "failed"):
             continue
 
-        pics = sorted(RAW_DIR.glob(f"{nr}_*.jpg"))
+        pics = _list_image_paths(nr)
         img_url = ""
         if pics:
             rel = pics[-1].relative_to(BASE_DIR)
