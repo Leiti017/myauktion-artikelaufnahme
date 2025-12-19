@@ -35,7 +35,7 @@ def _normalize_title(title: str) -> str:
 
 from pathlib import Path
 from PIL import Image, ImageOps
-import io, json, time, csv, math, os, datetime
+import io, json, time, csv, math, os, datetime, zipfile
 import re
 from typing import Any, Dict, Optional, Tuple
 
@@ -792,7 +792,7 @@ def articles_page():
     return FileResponse(str(BASE_DIR / "articles.html"))
 
 
-@app.get("/api/health")
+@app.api_route("/api/health", methods=["GET","HEAD"])
 def health():
     return {"ok": True}
 
@@ -891,6 +891,76 @@ def export_csv(from_nr: str | None = None, to_nr: str | None = None):
         w.writerow(r)
     content = ("\ufeff" + bio.getvalue()).encode("utf-8")
     return Response(content, media_type="text/csv", headers={"Content-Disposition":"attachment; filename=artikel_export.csv"})
+
+
+# ----------------------------
+# Bilder ZIP Export (Admin, Von/Bis ArtikelNr)
+# ----------------------------
+def _images_for_art(artikelnr: str):
+    """Return list of image Paths for article, ordered: ART.jpg, ART_1.jpg, ART_2.jpg..."""
+    art = str(artikelnr).strip()
+    pics = list(RAW_DIR.glob(f"{art}*.jpg"))
+    def _k(p: Path):
+        if p.name == f"{art}.jpg":
+            return 0
+        m = re.search(rf"^{re.escape(art)}_(\d+)\.jpg$", p.name)
+        if m:
+            try:
+                return int(m.group(1))
+            except Exception:
+                return 999999
+        return 999999
+    pics.sort(key=_k)
+    return pics
+
+def _in_range_art(n: str, from_nr: str | None, to_nr: str | None) -> bool:
+    try:
+        ni = int(n)
+    except Exception:
+        return False
+    if from_nr:
+        try:
+            if ni < int(from_nr): return False
+        except Exception:
+            pass
+    if to_nr:
+        try:
+            if ni > int(to_nr): return False
+        except Exception:
+            pass
+    return True
+
+@app.get("/api/images.zip")
+@app.get("/api/export_images.zip")
+@app.get("/api/bilder.zip")
+def export_images_zip(request: Request, from_nr: str | None = None, to_nr: str | None = None):
+    """ZIP mit allen Bildern (RAW) für Artikel (optional Von/Bis ArtikelNr).
+    Admin-Token geschützt (X-Admin-Token oder ?token=...).
+    """
+    guard = _admin_guard(request)
+    if guard:
+        return guard
+
+    bio = io.BytesIO()
+    with zipfile.ZipFile(bio, mode="w", compression=zipfile.ZIP_DEFLATED) as z:
+        # Artikel über JSONs bestimmen (damit nur echte Positionen drin sind)
+        for jf in sorted(RAW_DIR.glob("*.json")):
+            art = jf.stem
+            if (from_nr or to_nr) and not _in_range_art(art, from_nr, to_nr):
+                continue
+            for p in _images_for_art(art):
+                try:
+                    # in zip nur Dateiname, weil schon eindeutig (ART...jpg)
+                    z.writestr(p.name, p.read_bytes())
+                except Exception:
+                    pass
+
+    content = bio.getvalue()
+    return Response(
+        content,
+        media_type="application/zip",
+        headers={"Content-Disposition": "attachment; filename=artikel_bilder.zip"},
+    )
 
 
 @app.get("/api/next_artikelnr")
