@@ -101,19 +101,46 @@ def _list_image_paths(artikelnr: str, directory: Path = None) -> list[Path]:
     return paths
 
 
-def _migrate_legacy_zero(artikelnr: str) -> None:
-    """Legacy support: if <artikelnr>_0.jpg exists but <artikelnr>.jpg not, rename to titelbild."""
-    try:
-        artikelnr = str(artikelnr)
-        legacy = RAW_DIR / f"{artikelnr}_0.jpg"
-        new = RAW_DIR / f"{artikelnr}.jpg"
-        if legacy.exists() and not new.exists():
-            legacy.rename(new)
+def _next_image_path(artikelnr: str) -> Path:
+    """Return next image path using scheme:
+    - if <art>.jpg missing -> that is next (titelbild)
+    - else -> <art>_1.jpg, <art>_2.jpg ... next free index
+    """
+    art = str(artikelnr).strip()
+    _migrate_legacy_zero(art)
+    _migrate_bad_suffixes(art)
+    main = RAW_DIR / f"{art}.jpg"
+    if not main.exists():
+        return main
 
+    existing = _list_image_paths(art)
+    max_idx = 0
+    for p in existing:
+        k = _img_sort_key(p, art)  # 0 for main, N for _N
+        if k is not None and isinstance(k, int) and k > max_idx and k < 999999:
+            max_idx = k
+    next_idx = max(max_idx, 0) + 1
+    return RAW_DIR / f"{art}_{next_idx}.jpg"
+
+
+def _migrate_legacy_zero(artikelnr: str) -> None:
+    """Legacy support:
+    - if <artikelnr>_0.jpg exists and <artikelnr>.jpg not -> rename to titelbild
+    - if both exist -> move _0 to next free suffix (_1, _2, ...)
+    """
+    try:
+        art = str(artikelnr).strip()
+        legacy = RAW_DIR / f"{art}_0.jpg"
+        main = RAW_DIR / f"{art}.jpg"
+        if not legacy.exists():
+            return
+
+        if not main.exists():
+            legacy.rename(main)
             # processed best-effort
             try:
-                legacy_stem = legacy.stem
-                new_stem = new.stem
+                legacy_stem = f"{art}_0"
+                new_stem = art
                 for pf in PROCESSED_DIR.glob(legacy_stem + ".*"):
                     try:
                         pf.rename(PROCESSED_DIR / (new_stem + pf.suffix))
@@ -121,19 +148,71 @@ def _migrate_legacy_zero(artikelnr: str) -> None:
                         pass
             except Exception:
                 pass
+            return
 
-            # meta update best-effort
+        # main exists -> move legacy to next free suffix
+        n = 1
+        while (RAW_DIR / f"{art}_{n}.jpg").exists():
+            n += 1
+        newp = RAW_DIR / f"{art}_{n}.jpg"
+        legacy.rename(newp)
+
+        # processed best-effort
+        try:
+            legacy_stem = f"{art}_0"
+            new_stem = f"{art}_{n}"
+            for pf in PROCESSED_DIR.glob(legacy_stem + ".*"):
+                try:
+                    pf.rename(PROCESSED_DIR / (new_stem + pf.suffix))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+    except Exception:
+        return
+
+
+def _migrate_bad_suffixes(artikelnr: str) -> None:
+    """Fix older bug where suffix accidentally became next article number (e.g. 123456_123457.jpg).
+    If we find very large suffixes and no small suffixes, we renumber them to _1, _2 ... preserving order.
+    """
+    art = str(artikelnr).strip()
+    try:
+        art_i = int(art)
+    except Exception:
+        return
+
+    pics = []
+    for p in RAW_DIR.glob(f"{art}_*.jpg"):
+        m = re.match(rf"^{re.escape(art)}_(\d+)\.jpg$", p.name)
+        if not m:
+            continue
+        try:
+            n = int(m.group(1))
+        except Exception:
+            continue
+        pics.append((n, p))
+
+    if not pics:
+        return
+
+    small = [n for n,_ in pics if 1 <= n <= 9999]
+    huge  = [(n,p) for n,p in pics if n >= 100000 or n >= art_i]  # suspicious
+
+    # only act if we have suspicious huge suffixes and NO small ones (avoid destroying correct data)
+    if huge and not small:
+        huge.sort(key=lambda t: t[0])
+        next_idx = 1
+        for _, p in huge:
+            # find next free small index
+            while (RAW_DIR / f"{art}_{next_idx}.jpg").exists():
+                next_idx += 1
             try:
-                mj = _load_meta_json(artikelnr)
-                if str(mj.get("cover", "")).strip() == legacy.name:
-                    mj["cover"] = new.name
-                if str(mj.get("last_image", "")).strip() == legacy.name:
-                    mj["last_image"] = new.name
-                _save_meta_json(artikelnr, mj)
+                p.rename(RAW_DIR / f"{art}_{next_idx}.jpg")
             except Exception:
                 pass
-    except Exception:
-        pass
+            next_idx += 1
+
 
 def _is_valid_article_image_name(artikelnr: str, filename: str) -> bool:
     """Allow <artikelnr>.jpg and <artikelnr>_N.jpg only."""
@@ -991,6 +1070,7 @@ async def upload(
 ):
     artikelnr = str(artikelnr).strip()
     _migrate_legacy_zero(artikelnr)
+    _migrate_bad_suffixes(artikelnr)
     data = await file.read()
 
     try:
@@ -1003,9 +1083,7 @@ async def upload(
     except Exception as e:
         return JSONResponse({"ok": False, "error": f"Ungültiges Bild: {e}"}, status_code=400)
 
-    existing = _list_image_paths(artikelnr)
-    idx = int(existing[-1].stem.split("_")[-1]) + 1 if existing else 0
-    out = RAW_DIR / f"{artikelnr}_{idx}.jpg"
+    out = _next_image_path(artikelnr)
     out.parent.mkdir(parents=True, exist_ok=True)
     img.save(out, "JPEG", quality=78)
 
@@ -1029,6 +1107,7 @@ async def upload(
 def images(artikelnr: str):
     artikelnr = str(artikelnr).strip()
     _migrate_legacy_zero(artikelnr)
+    _migrate_bad_suffixes(artikelnr)
     meta = _load_meta_json(artikelnr)
     cover = str(meta.get("cover") or "").strip()
 
@@ -1047,6 +1126,7 @@ def images(artikelnr: str):
 def set_cover(payload: Dict[str, Any]):
     artikelnr = str(payload.get("artikelnr", "")).strip()
     _migrate_legacy_zero(artikelnr)
+    _migrate_bad_suffixes(artikelnr)
     filename = str(payload.get("filename", "") or payload.get("file", "") or payload.get("url", "")).strip()
     if "/" in filename:
         filename = filename.split("/")[-1]
@@ -1073,6 +1153,7 @@ def set_cover(payload: Dict[str, Any]):
 def delete_last_image(data: Dict[str, Any]):
     artikelnr = str(data.get("artikelnr", "")).strip()
     _migrate_legacy_zero(artikelnr)
+    _migrate_bad_suffixes(artikelnr)
     if not artikelnr:
         return JSONResponse({"ok": False, "error": "Artikelnummer fehlt"}, status_code=400)
 
@@ -1112,6 +1193,7 @@ def delete_last_image(data: Dict[str, Any]):
 def delete_image(payload: Dict[str, Any]):
     artikelnr = str(payload.get("artikelnr", "")).strip()
     _migrate_legacy_zero(artikelnr)
+    _migrate_bad_suffixes(artikelnr)
     filename = str(payload.get("filename", "") or payload.get("name","") or payload.get("file","") or payload.get("url","")).strip()
 
     # falls URL: nur basename nehmen
@@ -1170,6 +1252,7 @@ def delete_image(payload: Dict[str, Any]):
 def meta(artikelnr: str):
     artikelnr = str(artikelnr).strip()
     _migrate_legacy_zero(artikelnr)
+    _migrate_bad_suffixes(artikelnr)
     mj = _load_meta_json(artikelnr)
 
     pics = _list_image_paths(artikelnr)
@@ -1202,6 +1285,7 @@ def meta(artikelnr: str):
 def save(data: Dict[str, Any]):
     artikelnr = str(data.get("artikelnr", "")).strip()
     _migrate_legacy_zero(artikelnr)
+    _migrate_bad_suffixes(artikelnr)
     if not artikelnr:
         return JSONResponse({"ok": False, "error": "Artikelnummer fehlt"}, status_code=400)
 
@@ -1255,6 +1339,7 @@ def save(data: Dict[str, Any]):
 def describe(artikelnr: str):
     artikelnr = str(artikelnr).strip()
     _migrate_legacy_zero(artikelnr)
+    _migrate_bad_suffixes(artikelnr)
     pics = _list_image_paths(artikelnr)
     if not pics:
         return JSONResponse({"ok": False, "error": "Kein Bild für diese Artikelnummer gefunden."}, status_code=400)
