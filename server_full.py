@@ -1685,3 +1685,27 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", "10000"))
     uvicorn.run("server_full:app", host="0.0.0.0", port=port)
+
+# ----------------------------
+# Debug: rembg availability (deploy check)
+# ----------------------------
+@app.get("/api/debug/rembg")
+def debug_rembg():
+    """
+    Quick check if background removal is available on the server.
+    Useful on Render to verify rembg/onnxruntime + Python version.
+    """
+    processed_count = 0
+    try:
+        processed_count = sum(1 for _ in PROCESSED_DIR.glob("*.jpg"))
+    except Exception:
+        processed_count = 0
+
+    return {
+        "rembg_available": bool(REMBG_AVAILABLE),
+        "has_session": bool(REMBG_SESSION is not None),
+        "python_version": __import__("sys").version,
+        "processed_dir": str(PROCESSED_DIR),
+        "processed_jpg_count": processed_count,
+    }
+
