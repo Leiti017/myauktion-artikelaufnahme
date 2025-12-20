@@ -1319,18 +1319,17 @@ def save(data: Dict[str, Any]):
     if not artikelnr:
         return JSONResponse({"ok": False, "error": "Artikelnummer fehlt"}, status_code=400)
 
-
-# De-dup: same payload within short window -> ignore (prevents double-click duplicates)
-try:
-    h = _payload_hash(data)
-    now = time.time()
-    with _SAVE_DEDUP_LOCK:
-        prev = _SAVE_DEDUP.get(artikelnr)
-        if prev and prev[1] == h and (now - prev[0]) < 2.0:
-            return {"ok": True, "dedup": True}
-        _SAVE_DEDUP[artikelnr] = (now, h)
-except Exception:
-    pass
+    # De-dup: same payload within short window -> ignore (prevents double-click duplicates)
+    try:
+        h = _payload_hash(data)
+        now = time.time()
+        with _SAVE_DEDUP_LOCK:
+            prev = _SAVE_DEDUP.get(artikelnr)
+            if prev and prev[1] == h and (now - prev[0]) < 2.0:
+                return {"ok": True, "dedup": True}
+            _SAVE_DEDUP[artikelnr] = (now, h)
+    except Exception:
+        pass
 
     mj = _load_meta_json(artikelnr)
 

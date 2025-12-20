@@ -22,6 +22,25 @@
   <script src="https://cdn.tailwindcss.com"></script>
 
   <style>
+/* Save confirmation pulse */
+@keyframes savePulse {
+  0% { transform: scale(1); }
+  40% { transform: scale(1.03); }
+  100% { transform: scale(1); }
+}
+.save-pulse {
+  animation: savePulse 0.6s ease-out;
+}
+#photo-count{
+  display:inline-flex;
+  align-items:center;
+  gap:.4rem;
+  padding:.25rem .5rem;
+  border-radius:999px;
+  border:1px solid rgba(255,255,255,.12);
+  background: rgba(0,0,0,.25);
+}
+
     :root { color-scheme: light dark; }
     body{
       min-height:100vh;
@@ -792,6 +811,8 @@ btnSave.onclick = async ()=>{
         goNextArticle();
       }// kurze „Gespeichert“-Bestätigung
     btnSave.innerHTML = '<span class="inline-flex items-center gap-2">✅ Gespeichert</span>';
+    btnSave.classList.add('save-pulse');
+    setTimeout(()=>btnSave.classList.remove('save-pulse'), 650);
     setTimeout(()=>{ try{ btnSave.innerHTML = _oldHTML; }catch(e){} }, 650);
 
   } finally {
