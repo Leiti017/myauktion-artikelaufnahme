@@ -226,18 +226,28 @@ def _make_cutout_jpeg_from_raw(raw_jpg_bytes: bytes) -> bytes:
 
 
 def _process_image_to_processed(raw_path: Path) -> None:
-    """Erstellt uploads/processed/<same filename>.jpg (best-effort)."""
-    if not REMBG_AVAILABLE or not REMBG_SESSION:
-        return
+    """
+    Erstellt uploads/processed/<same filename>.jpg (best-effort).
+    Loggt Erfolg/Fehler, damit man auf Render sofort sieht, ob Freistellen läuft.
+    """
     try:
+        if not REMBG_AVAILABLE or not REMBG_SESSION:
+            print(f"[BG-FREI] rembg not available -> skip {raw_path.name}")
+            return
+
+        PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+
         raw_bytes = raw_path.read_bytes()
         out_bytes = _make_cutout_jpeg_from_raw(raw_bytes)
+
         out_path = PROCESSED_DIR / raw_path.name
-        out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_bytes(out_bytes)
-    except Exception:
-        # darf Upload nie blockieren
-        return
+
+        print(f"[BG-FREI] OK processed -> {out_path}")
+    except Exception as e:
+        print(f"[BG-FREI] ERROR for {raw_path.name}: {e}")
+
+
 
 
 def _migrate_legacy_zero(artikelnr: str) -> None:
@@ -1224,8 +1234,16 @@ async def upload(
     out = _next_image_path(artikelnr)
     out.parent.mkdir(parents=True, exist_ok=True)
     img.save(out, "JPEG", quality=78)
-
     # Freistellen im Hintergrund (wie MyAuktion-Admin)
+    try:
+        if background_tasks is None:
+            from fastapi import BackgroundTasks as _BT
+            background_tasks = _BT()
+        background_tasks.add_task(_process_image_to_processed, out)
+        print(f"[BG-FREI] queued freistellen for {out.name}")
+    except Exception as e:
+        print(f"[BG-FREI] could not queue freistellen for {out.name}: {e}")
+
     if background_tasks:
         background_tasks.add_task(_process_image_to_processed, out)
 
