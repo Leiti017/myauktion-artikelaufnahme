@@ -34,33 +34,12 @@ def _normalize_title(title: str) -> str:
     return t
 
 from pathlib import Path
-from PIL import Image, ImageOps, ImageFilter, ImageDraw
+from PIL import Image, ImageOps
 import io, json, time, csv, math, os, datetime, zipfile, hashlib, threading
 import re
 from typing import Any, Dict, Optional, Tuple
 
 app = FastAPI()
-
-# ----------------------------
-# Debug: rembg availability (deploy check)
-# ----------------------------
-@app.get("/api/debug/rembg")
-def debug_rembg():
-    processed_count = 0
-    try:
-        processed_count = sum(1 for _ in PROCESSED_DIR.glob("*.jpg"))
-    except Exception:
-        processed_count = 0
-
-    import sys
-    return {
-        "rembg_available": bool(REMBG_AVAILABLE),
-        "has_session": bool(REMBG_SESSION is not None),
-        "python_version": sys.version,
-        "processed_dir": str(PROCESSED_DIR),
-        "processed_jpg_count": processed_count,
-    }
-
 
 @app.middleware("http")
 async def _no_cache_html(request, call_next):
@@ -92,143 +71,6 @@ EXPORT_DIR = BASE_DIR / "export"
 RAW_DIR.mkdir(parents=True, exist_ok=True)
 PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 EXPORT_DIR.mkdir(parents=True, exist_ok=True)
-
-
-# ----------------------------
-# Auto-Freistellen (rembg) – lazy init für Render (Port startet sofort)
-# ----------------------------
-import threading
-IMAGE_TARGET_SIZE = (750, 750)
-
-REMBG_AVAILABLE = False
-REMBG_SESSION = None
-_REMBG_LOCK = threading.Lock()
-
-try:
-    from rembg import new_session, remove
-    REMBG_AVAILABLE = True
-except Exception as e:
-    print(f"[REMBG] import failed: {e}")
-    REMBG_AVAILABLE = False
-
-
-def _get_rembg_session():
-    """
-    Lazy init – Session wird erst beim ersten Freistellen erstellt.
-    """
-    global REMBG_SESSION
-    if not REMBG_AVAILABLE:
-        return None
-    if REMBG_SESSION is not None:
-        return REMBG_SESSION
-    with _REMBG_LOCK:
-        if REMBG_SESSION is None:
-            print("[REMBG] creating session (u2net) ...")
-            REMBG_SESSION = new_session("u2net")
-            print("[REMBG] session ready")
-    return REMBG_SESSION
-
-
-def _make_cutout_jpeg_from_raw(raw_jpg_bytes: bytes) -> bytes:
-    """
-    Freistellen + Bodenschatten + 750x750 Weiß.
-    Returns: JPEG bytes.
-    """
-    # RAW öffnen
-    with Image.open(io.BytesIO(raw_jpg_bytes)) as im:
-        im = ImageOps.exif_transpose(im).convert("RGBA")
-
-        # rembg erwartet am besten PNG bytes
-        buf = io.BytesIO()
-        im.save(buf, format="PNG")
-        buf.seek(0)
-
-        sess = _get_rembg_session()
-        if sess is None:
-            raise RuntimeError("rembg session not available")
-
-        cut = remove(buf.read(), session=sess)  # type: ignore
-        fg = Image.open(io.BytesIO(cut)).convert("RGBA")
-
-    # Alpha etwas säubern
-    alpha = fg.split()[-1]
-    alpha = alpha.point(lambda v: 0 if v < 20 else v)
-    fg.putalpha(alpha)
-
-    bbox = alpha.getbbox()
-    if not bbox:
-        base = Image.new("RGB", IMAGE_TARGET_SIZE, (255, 255, 255))
-        im_rgb = im.convert("RGB")
-        im_rgb = ImageOps.contain(im_rgb, IMAGE_TARGET_SIZE)
-        x = (base.size[0] - im_rgb.size[0]) // 2
-        y = (base.size[1] - im_rgb.size[1]) // 2
-        base.paste(im_rgb, (x, y))
-        out = io.BytesIO()
-        base.save(out, "JPEG", quality=90)
-        return out.getvalue()
-
-    x0, y0, x1, y1 = bbox
-    fg_cropped = fg.crop((x0, y0, x1, y1))
-    w, h = fg_cropped.size
-
-    # Bodenschatten (Ellipse + Blur)
-    shadow_mask = Image.new("L", (w, h), 0)
-    draw = ImageDraw.Draw(shadow_mask)
-
-    shadow_w = int(w * 0.7)
-    shadow_h = max(6, int(h * 0.15))
-    cx = w // 2
-    sx0 = max(0, cx - shadow_w // 2)
-    sx1 = min(w, cx + shadow_w // 2)
-    sy0 = max(0, h - shadow_h - 1)
-    sy1 = h
-
-    draw.ellipse([sx0, sy0, sx1, sy1], fill=255)
-    shadow_mask = shadow_mask.filter(ImageFilter.GaussianBlur(12))
-    shadow_mask = shadow_mask.point(lambda a: int(a * (90 / 255.0)))
-
-    shadow_rgba = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    shadow_rgba.paste((0, 0, 0, 255), mask=shadow_mask)
-
-    base_rgba = Image.new("RGBA", (w, h), (255, 255, 255, 255))
-    base_rgba.paste(shadow_rgba, (0, 0), shadow_rgba)
-    base_rgba.paste(fg_cropped, (0, 0), fg_cropped)
-
-    result = base_rgba.convert("RGB")
-
-    result = ImageOps.contain(result, IMAGE_TARGET_SIZE)
-    final = Image.new("RGB", IMAGE_TARGET_SIZE, (255, 255, 255))
-    ox = (IMAGE_TARGET_SIZE[0] - result.size[0]) // 2
-    oy = (IMAGE_TARGET_SIZE[1] - result.size[1]) // 2
-    final.paste(result, (ox, oy))
-
-    out = io.BytesIO()
-    final.save(out, "JPEG", quality=90)
-    return out.getvalue()
-
-
-def _process_image_to_processed(raw_path: Path) -> None:
-    """
-    Erstellt uploads/processed/<same filename>.jpg (best-effort).
-    Loggt Erfolg/Fehler, damit man auf Render sofort sieht, ob Freistellen läuft.
-    """
-    try:
-        if not REMBG_AVAILABLE:
-            print(f"[BG-FREI] rembg not available -> skip {raw_path.name}")
-            return
-
-        PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
-
-        raw_bytes = raw_path.read_bytes()
-        out_bytes = _make_cutout_jpeg_from_raw(raw_bytes)
-
-        out_path = PROCESSED_DIR / raw_path.name
-        out_path.write_bytes(out_bytes)
-
-        print(f"[BG-FREI] OK processed -> {out_path}")
-    except Exception as e:
-        print(f"[BG-FREI] ERROR for {raw_path.name}: {e}")
-
 
 EXPORT_CSV = EXPORT_DIR / "artikel_export.csv"
 
@@ -275,9 +117,7 @@ def _next_image_path(artikelnr: str) -> Path:
     if not main.exists():
         return main
 
-    pics = _list_image_paths(art, PROCESSED_DIR)
-    if not pics:
-        pics = _list_image_paths(art, RAW_DIR)
+    pics = _list_image_paths(art)
     nums: list[int] = []
     for p in pics:
         if p.name == f"{art}.jpg":
@@ -1022,7 +862,7 @@ def _list_articles() -> list[dict]:
         img_url = ""
         if pics:
             rel = pics[-1].relative_to(BASE_DIR)
-            img_url = "/static/" + rel.as_posix()
+            img_url = "/static/" + str(rel).replace("\\", "/")
 
         items.append({
             "artikelnr": nr,
@@ -1277,16 +1117,6 @@ async def upload(
     out.parent.mkdir(parents=True, exist_ok=True)
     img.save(out, "JPEG", quality=78)
 
-    # Freistellen im Hintergrund
-    try:
-        if background_tasks is None:
-            from fastapi import BackgroundTasks as _BT
-            background_tasks = _BT()
-        background_tasks.add_task(_process_image_to_processed, out)
-        print(f"[BG-FREI] queued freistellen for {out.name}")
-    except Exception as e:
-        print(f"[BG-FREI] could not queue freistellen for {out.name}: {e}")
-
     # set pending, damit Polling NICHT bei altem realtime sofort stoppt
     mj = _load_meta_json(artikelnr)
     mj["last_image"] = out.name
@@ -1312,14 +1142,9 @@ def images(artikelnr: str):
     cover = str(meta.get("cover") or "").strip()
 
     files = []
-
-    pics = _list_image_paths(artikelnr, PROCESSED_DIR)
-    if not pics:
-        pics = _list_image_paths(artikelnr, RAW_DIR)
-
-    for f in pics:
+    for f in _list_image_paths(artikelnr):
         rel = f.relative_to(BASE_DIR)
-        files.append("/static/" + rel.as_posix())
+        files.append("/static/" + str(rel).replace("\\", "/"))
 
     # cover-first ordering
     if cover:
@@ -1464,7 +1289,7 @@ def meta(artikelnr: str):
     img_url = ""
     if pics:
         rel = pics[-1].relative_to(BASE_DIR)
-        img_url = "/static/" + rel.as_posix()
+        img_url = "/static/" + str(rel).replace("\\", "/")
 
     return {
         "ok": True,
@@ -1709,7 +1534,7 @@ def admin_articles(request: Request, sortiment: str = "", only_failed: int = 0):
         img_url = ""
         if pics:
             rel = pics[-1].relative_to(BASE_DIR)
-            img_url = "/static/" + rel.as_posix()
+            img_url = "/static/" + str(rel).replace("\\", "/")
 
         items.append({
             "artikelnr": nr,
