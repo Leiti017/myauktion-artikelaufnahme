@@ -970,7 +970,7 @@ def _list_articles() -> list[dict]:
         img_url = ""
         if pics:
             rel = pics[-1].relative_to(BASE_DIR)
-            img_url = "/static/" + str(rel).replace("\\", "/")
+            img_url = "/static/" + rel.as_posix()
 
         items.append({
             "artikelnr": nr,
@@ -1261,7 +1261,7 @@ def images(artikelnr: str):
 
     for f in pics:
         rel = f.relative_to(BASE_DIR)
-        files.append("/static/" + str(rel).replace("\", "/"))
+        files.append("/static/" + rel.as_posix())
 
     # cover-first ordering
     if cover:
@@ -1408,7 +1408,7 @@ def meta(artikelnr: str):
     img_url = ""
     if pics:
         rel = pics[-1].relative_to(BASE_DIR)
-        img_url = "/static/" + str(rel).replace("\\", "/")
+        img_url = "/static/" + rel.as_posix()
 
     return {
         "ok": True,
@@ -1653,7 +1653,7 @@ def admin_articles(request: Request, sortiment: str = "", only_failed: int = 0):
         img_url = ""
         if pics:
             rel = pics[-1].relative_to(BASE_DIR)
-            img_url = "/static/" + str(rel).replace("\\", "/")
+            img_url = "/static/" + rel.as_posix()
 
         items.append({
             "artikelnr": nr,
