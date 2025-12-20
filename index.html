@@ -795,7 +795,7 @@ btnSave.onclick = async ()=>{
         }catch(e){}
 
         goNextArticle();
-      }// kurze „Gespeichert“-Bestätigung
+    // kurze „Gespeichert“-Bestätigung
     btnSave.innerHTML = '<span class="inline-flex items-center gap-2">✅ Gespeichert</span>';
     btnSave.classList.add('save-pulse');
     setTimeout(()=>btnSave.classList.remove('save-pulse'), 650);
