@@ -207,6 +207,7 @@
         <div class="mt-3">
           <div id="status-pill" class="pill hidden"><span class="dot"></span><span id="status-pill-text">KI läuft…</span></div>
           <div id="status-text" class="text-[11px] text-white/80 mt-2">Bereit.</div>
+          <div id="save-status" class="text-[11px] text-white/80 mt-1">Status: –</div>
         </div>
       </section>
 
@@ -284,6 +285,60 @@ const btnDeleteArticle = document.getElementById('btn-delete-article');
   const statusText = document.getElementById('status-text');
   const statusPill = document.getElementById('status-pill');
   const statusPillText = document.getElementById('status-pill-text');
+
+
+  const saveStatusEl = document.getElementById('save-status');
+  let _dirty = false;
+  let _lastSnapshot = "";
+  let _lastSavedAt = 0;
+
+  function _snapshot(){
+    // snapshot only of article-specific fields (not global defaults)
+    return JSON.stringify({
+      artikelnr: (fArt.value||"").trim(),
+      lagerort: (fLager.value||"").trim(),
+      menge: String(fMenge.value||""),
+      titel: (fTitle.value||"").trim(),
+      beschreibung: (fDesc.value||"").trim(),
+      retail_price: String(fRetail.value||""),
+      rufpreis: String(fRuf.value||""),
+    });
+  }
+
+  function _setSaveStatus(text){
+    if(!saveStatusEl) return;
+    saveStatusEl.textContent = text || "Status: –";
+  }
+
+  function _markClean(label){
+    _dirty = false;
+    _lastSnapshot = _snapshot();
+    if(label) _setSaveStatus(label);
+    else _setSaveStatus("✅ Gespeichert");
+  }
+
+  function _markDirty(){
+    // ignore while no valid article number is entered
+    if(!validArtNr()) return;
+    const snap = _snapshot();
+    if(_lastSnapshot && snap === _lastSnapshot){
+      // back to last saved state
+      _dirty = false;
+      _setSaveStatus("✅ Gespeichert");
+      return;
+    }
+    _dirty = true;
+    _setSaveStatus("✏️ Nicht gespeichert");
+  }
+
+  // Warn on leaving with unsaved changes
+  window.addEventListener('beforeunload', (e)=>{
+    if(_dirty){
+      e.preventDefault();
+      e.returnValue = "";
+    }
+  });
+
 
   const logEl = document.getElementById('log');
   const toastWrap = document.getElementById('toast-wrap');
@@ -525,8 +580,14 @@ const btnDeleteArticle = document.getElementById('btn-delete-article');
     applyPriceMode();
 
     if(j.image){
-      thumb.innerHTML = `<img src="${j.image}">`;
+      thumb.innerHTML = `<img src=\"${j.image}\">`;
     }
+
+    // Loaded from server -> treat as clean baseline
+    try{
+      const t = new Date().toLocaleTimeString();
+      _markClean('📥 Geladen (' + t + ')');
+    }catch(e){}
   }
 
   async function pollUntilDone(art, maxMs=18000){
@@ -545,8 +606,9 @@ const btnDeleteArticle = document.getElementById('btn-delete-article');
           fRuf.value    = (j.rufpreis ?? "");
           applyPriceMode();
           setPill(false);
-          statusText.textContent = "KI-Vorschlag übernommen.";
-          toast("KI fertig");
+          statusText.textContent = \"KI-Vorschlag übernommen.\";
+          toast(\"KI fertig\");
+          try{ _markClean('🤖 KI übernommen (' + new Date().toLocaleTimeString() + ')'); }catch(e){}
           return;
         }
       }
@@ -572,8 +634,14 @@ const btnDeleteArticle = document.getElementById('btn-delete-article');
   // Foto machen (Kamera) nur über Tippen auf das Vorschau-Feld
   thumb.onclick = ()=> fFileCamera.click();
 
-  fArt.addEventListener('input', updateArtnrHint);
-  fMenge.addEventListener('change', ()=>{});
+  fArt.addEventListener('input', ()=>{ updateArtnrHint(); /* artikelnr change resets dirty state */ });
+  // Änderungen am Artikel -> Status auf „nicht gespeichert“
+  ;[fLager,fMenge,fTitle,fDesc,fRetail,fRuf].forEach(el=>{
+    if(!el) return;
+    el.addEventListener('input', _markDirty);
+    el.addEventListener('change', _markDirty);
+  });
+  
 
   fArt.addEventListener('blur', async ()=>{
     updateArtnrHint();
@@ -694,10 +762,11 @@ const btnDeleteArticle = document.getElementById('btn-delete-article');
     fRuf.value = (j.rufpreis ?? "");
     applyPriceMode();
     setPill(false);
-    toast("KI übernommen");
+    toast(\"KI übernommen\");
+    try{ _markClean('🤖 KI übernommen (' + new Date().toLocaleTimeString() + ')'); }catch(e){}
   };
   function goNextArticle(){
-    const cur = (fArt.value||"").trim();
+    const cur = (fArt.value||\"\").trim();
     if(!/^[0-9]{1,}$/.test(cur)) return;
     const next = String(parseInt(cur,10) + 1);
     fArt.value = next;
@@ -718,7 +787,10 @@ const btnDeleteArticle = document.getElementById('btn-delete-article');
     try{ const s = loadSettings(); fMenge.value = String(s.menge ?? 1); }catch(e){}
     // Settings beibehalten (Defaults bleiben)
     if(typeof applyPriceMode === "function") applyPriceMode();
-    statusText.textContent = "Bereit.";
+    _dirty = false;
+    _lastSnapshot = _snapshot();
+    _setSaveStatus('Status: bereit');
+    statusText.textContent = \"Bereit.\";
     try{ window.scrollTo({top:0, behavior:"smooth"});}catch(e){}
     fArt.focus();
   }
@@ -781,6 +853,12 @@ btnSave.onclick = async ()=>{
         }
         toast("Gespeichert");
         log("Gespeichert: " + art);
+        try{
+          _dirty = false;
+          _lastSnapshot = _snapshot();
+          _lastSavedAt = Date.now();
+          _setSaveStatus('✅ Gespeichert (' + new Date().toLocaleTimeString() + ')');
+        }catch(e){}
   
 
         // Felder die IMMER zurückgesetzt werden sollen
@@ -837,6 +915,7 @@ btnSave.onclick = async ()=>{
     applySettingsToUI();
     applyPriceMode();
     loadSortimente();
+    try{ _setSaveStatus('Status: bereit'); }catch(e){}
 
     // Bearbeiten-Modus: aus Admin/Gesamtartikel kommend
     try{
