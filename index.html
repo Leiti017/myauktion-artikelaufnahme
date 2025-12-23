@@ -373,12 +373,23 @@ const btnDeleteArticle = document.getElementById('btn-delete-article');
         uebernehmen: 1,
         angeliefert: "",
         betriebsmittel: "",
-        price_system_enabled: true
-        ,hide_listprice: false,
-        sortiment: ""
+        sortiment: "",
+        price_system_enabled: true,
+        hide_listprice: false
       }, d || {});
     }catch(e){
-      return {einlieferer_id:"22",mitarbeiter:"Jan",menge:1,lagerstand:1,uebernehmen:1,angeliefert:"",betriebsmittel:"",price_system_enabled:true};
+      return {
+        einlieferer_id:"22",
+        mitarbeiter:"Jan",
+        menge:1,
+        lagerstand:1,
+        uebernehmen:1,
+        angeliefert:"",
+        betriebsmittel:"",
+        sortiment:"",
+        price_system_enabled:true,
+        hide_listprice:false
+      };
     }
   }
   function saveSettings(s){ try{ localStorage.setItem(SETTINGS_KEY, JSON.stringify(s)); }catch(e){} }
@@ -413,7 +424,9 @@ const btnDeleteArticle = document.getElementById('btn-delete-article');
 
   function readSettingsFromUI(){
     const prev = loadSettings();
+    // WICHTIG: Preis-Flags dürfen NICHT verloren gehen, sonst „springen“ die Buttons zurück.
     return {
+      ...prev,
       einlieferer_id: (sEinl.value||"").trim(),
       mitarbeiter: (sMit.value||"").trim(),
       menge: parseInt((fMenge?.value)||"1",10) || 1,
@@ -422,14 +435,24 @@ const btnDeleteArticle = document.getElementById('btn-delete-article');
       angeliefert: (sAngeliefert.value||"").trim(),
       betriebsmittel: (sBetriebsmittel.value||"").trim(),
       sortiment: (sSortiment ? (sSortiment.value||"").trim() : (prev.sortiment||"")),
-      price_system_enabled: (prev.price_system_enabled !== false)
+      // preserve flags explicitly (falls prev unvollständig ist)
+      price_system_enabled: (prev.price_system_enabled !== false),
+      hide_listprice: (prev.hide_listprice === true)
     };
   }
 
   function toggleSettings(){
     const open = settingsPanel.classList.contains('hidden');
-    if(open){ settingsPanel.classList.remove('hidden'); btnSettings.textContent='⬆️ Einstellungen'; }
-    else { settingsPanel.classList.add('hidden'); btnSettings.textContent='⚙️ Einstellungen'; }
+    if(open){
+      settingsPanel.classList.remove('hidden');
+      // visuelles Feedback, damit man sofort sieht, dass es offen ist
+      settingsPanel.classList.add('ring','ring-white/40','ring-offset-2','ring-offset-transparent');
+      btnSettings.textContent='⬆️ Einstellungen';
+    }else{
+      settingsPanel.classList.add('hidden');
+      settingsPanel.classList.remove('ring','ring-white/40','ring-offset-2','ring-offset-transparent');
+      btnSettings.textContent='⚙️ Einstellungen';
+    }
   }
 
   function applyPriceMode(){
@@ -991,6 +1014,10 @@ btnSave.onclick = async ()=>{
     };
 
     btnPriceToggle.onclick = ()=>{
+      if(typeof validArtNr === "function" && !validArtNr()){
+        toast("Bitte zuerst eine gültige Artikelnummer eingeben");
+        return;
+      }
       const s = loadSettings();
       s.price_system_enabled = (s.price_system_enabled === false) ? true : false;
       saveSettings(s);
@@ -1001,6 +1028,10 @@ btnSave.onclick = async ()=>{
 
     if(btnToggleRetail){
       btnToggleRetail.onclick = ()=>{
+        if(typeof validArtNr === "function" && !validArtNr()){
+          toast("Bitte zuerst eine gültige Artikelnummer eingeben");
+          return;
+        }
         const s = loadSettings();
         s.hide_listprice = (s.hide_listprice === true) ? false : true;
         saveSettings(s);
