@@ -579,6 +579,14 @@ def _gdrive_backup_article(artikelnr: str) -> None:
         # cleanup old (daily)
         _gdrive_cleanup_old(token, folder_id)
 
+        # Upload/Update Meta JSON for this article (so Restore funktioniert)
+        meta_path = RAW_DIR / f"{artikelnr}.json"
+        if meta_path.exists():
+            try:
+                _gdrive_upload_bytes(token, folder_id, meta_path.name, meta_path.read_bytes(), "application/json")
+            except Exception:
+                pass
+
         # Upload/Update daily CSV
         day = time.strftime("%Y-%m-%d")
         daily_name = f"artikel_export_{day}.csv"
@@ -1156,7 +1164,7 @@ def recent_articles(mitarbeiter: str = "", limit: int = 12):
 
 
 @app.get("/api/articles")
-def articles_api(date_from: str | None = None, date_to: str | None = None):
+def articles_api(date_from: str | None = None, date_to: str | None = None, sortiment_id: str | None = None, sortiment_name: str | None = None, limit: int | None = None):
     """
     Gesamtartikel (neueste zuerst).
     Optional:
@@ -1182,11 +1190,37 @@ def articles_api(date_from: str | None = None, date_to: str | None = None):
         if tst:
             items = [x for x in items if int(x.get("created_at", 0) or 0) <= tst]
 
+
+    # Sortiment Filter (entweder per ID oder per Name)
+    if sortiment_name and not sortiment_id:
+        # Name -> ID suchen
+        sname = str(sortiment_name).strip().lower()
+        for s in _load_sortimente():
+            if str(s.get("name") or "").strip().lower() == sname:
+                sortiment_id = str(s.get("id"))
+                break
+
+    if sortiment_id:
+        sid = str(sortiment_id).strip()
+        items = [x for x in items if str(x.get("sortiment_id") or "").strip() == sid]
+
+    # sortiment_name in Response ergänzen (für UI)
+    for x in items:
+        if not x.get("sortiment_name"):
+            x["sortiment_name"] = _sortiment_name_by_id(x.get("sortiment_id"))
+
+    if limit:
+        try:
+            lim = max(1, int(limit))
+            items = items[:lim]
+        except Exception:
+            pass
+
     return {"ok": True, "items": items}
 
 
 @app.get("/api/export.csv")
-def export_csv(from_nr: str | None = None, to_nr: str | None = None, sortiment_id: str | None = None):
+def export_csv(from_nr: str | None = None, to_nr: str | None = None, sortiment_id: str | None = None, sortiment_name: str | None = None):
     """
     Export CSV (UTF-8 mit BOM für Excel). Optionaler Bereich:
       /api/export.csv?from_nr=123458&to_nr=123480
@@ -1194,7 +1228,7 @@ def export_csv(from_nr: str | None = None, to_nr: str | None = None, sortiment_i
     _ensure_export_csv_exists()
 
     # Kein Filter -> Datei direkt ausliefern
-    if not from_nr and not to_nr and not sortiment_id:
+    if not from_nr and not to_nr and not sortiment_id and not sortiment_name:
         return FileResponse(str(EXPORT_CSV), filename="artikel_export.csv", media_type="text/csv")
 
     # Filter -> in-memory CSV erzeugen
@@ -1216,6 +1250,15 @@ def export_csv(from_nr: str | None = None, to_nr: str | None = None, sortiment_i
         return True
 
     import io, csv
+    
+    # Sortiment Filter: Name -> ID (falls ID nicht direkt übergeben wurde)
+    if sortiment_name and not sortiment_id:
+        sname = str(sortiment_name).strip().lower()
+        for s in _load_sortimente():
+            if str(s.get("name") or "").strip().lower() == sname:
+                sortiment_id = str(s.get("id"))
+                break
+
     rows = []
     for jf in sorted(RAW_DIR.glob("*.json")):
         art = jf.stem
@@ -1289,7 +1332,7 @@ def _in_range_art(n: str, from_nr: str | None, to_nr: str | None) -> bool:
 @app.get("/api/images.zip")
 @app.get("/api/export_images.zip")
 @app.get("/api/bilder.zip")
-def export_images_zip(request: Request, from_nr: str | None = None, to_nr: str | None = None):
+def export_images_zip(request: Request, from_nr: str | None = None, to_nr: str | None = None, sortiment_id: str | None = None, sortiment_name: str | None = None):
     """ZIP mit allen Bildern (RAW) für Artikel (optional Von/Bis ArtikelNr).
     Admin-Token geschützt (X-Admin-Token oder ?token=...).
     """
@@ -1300,16 +1343,29 @@ def export_images_zip(request: Request, from_nr: str | None = None, to_nr: str |
     bio = io.BytesIO()
     with zipfile.ZipFile(bio, mode="w", compression=zipfile.ZIP_DEFLATED) as z:
         # Artikel über JSONs bestimmen (damit nur echte Positionen drin sind)
-        for jf in sorted(RAW_DIR.glob("*.json")):
-            art = jf.stem
-            if (from_nr or to_nr) and not _in_range_art(art, from_nr, to_nr):
-                continue
-            for p in _images_for_art(art):
-                try:
-                    # in zip nur Dateiname, weil schon eindeutig (ART...jpg)
-                    z.writestr(p.name, p.read_bytes())
-                except Exception:
-                    pass
+        
+            # Sortiment Filter: Name -> ID (falls ID nicht direkt übergeben wurde)
+            if sortiment_name and not sortiment_id:
+                sname = str(sortiment_name).strip().lower()
+                for s in _load_sortimente():
+                    if str(s.get("name") or "").strip().lower() == sname:
+                        sortiment_id = str(s.get("id"))
+                        break
+
+            for jf in sorted(RAW_DIR.glob("*.json")):
+                art = jf.stem
+                if (from_nr or to_nr) and not _in_range_art(art, from_nr, to_nr):
+                    continue
+                if sortiment_id:
+                    meta = _load_meta_json(art)
+                    if str(meta.get("sortiment_id") or "").strip() != str(sortiment_id).strip():
+                        continue
+                for p in _images_for_art(art):
+                    try:
+                        # in zip nur Dateiname, weil schon eindeutig (ART...jpg)
+                        z.writestr(p.name, p.read_bytes())
+                    except Exception:
+                        pass
 
     content = bio.getvalue()
     return Response(
@@ -1726,20 +1782,34 @@ def admin_sortimente_add(request: Request, data: Dict[str, Any]):
     if guard:
         return guard
     name = str(data.get("name", "") or "").strip()
+    raw_id = str(data.get("id", "") or "").strip()
     if not name:
         return JSONResponse({"ok": False, "error": "name fehlt"}, status_code=400)
 
     items = _load_sortimente()
+
     # already exists (case-insensitive)
     if any(str(x.get("name","")).strip().lower() == name.lower() for x in items):
         return {"ok": True, "items": _load_sortimente()}
 
     existing_ids = {int(x.get("id")) for x in items if str(x.get("id","")).strip().isdigit()}
-    sid = _generate_sortiment_id(existing_ids)
+
+    # optional custom ID
+    sid: int
+    if raw_id:
+        if not raw_id.isdigit():
+            return JSONResponse({"ok": False, "error": "id muss eine Zahl sein"}, status_code=400)
+        sid = int(raw_id)
+        if sid <= 0:
+            return JSONResponse({"ok": False, "error": "id muss > 0 sein"}, status_code=400)
+        if sid in existing_ids:
+            return JSONResponse({"ok": False, "error": "id bereits vergeben"}, status_code=409)
+    else:
+        sid = _generate_sortiment_id(existing_ids)
+
     items.append({"id": sid, "name": name})
     _save_sortimente(items)
     return {"ok": True, "item": {"id": sid, "name": name}, "items": _load_sortimente()}
-
 
 
 @app.post("/api/admin/sortimente/rename")
