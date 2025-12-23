@@ -584,13 +584,6 @@ def _gdrive_backup_article(artikelnr: str) -> None:
 # - Läuft im Background-Thread (damit Startup schnell bleibt)
 # ----------------------------
 RESTORE_MARKER = EXPORT_DIR / "restore_done.marker"
-# Restore mode:
-#  - EMPTY (default): restore only if local uploads/raw is empty
-#  - MERGE: restore missing files even if some local data exists (never overwrite)
-#  - ALWAYS: always restore (overwrite local files)
-DRIVE_RESTORE_MODE = (os.getenv("DRIVE_RESTORE_MODE", "EMPTY") or "EMPTY").strip().upper()
-# Set to 1 to ignore restore marker and run restore again
-DRIVE_RESTORE_FORCE = (os.getenv("DRIVE_RESTORE_FORCE", "0") or "0").strip() in ("1","true","TRUE","yes","YES")
 
 def _gdrive_list_files_in_folder(token: str, folder_id: str):
     files = []
@@ -684,7 +677,7 @@ def _gdrive_restore_all() -> None:
         return
     # only once per deploy/container
     try:
-        if (not DRIVE_RESTORE_FORCE) and RESTORE_MARKER.exists():
+        if RESTORE_MARKER.exists():
             return
     except Exception:
         pass
@@ -704,34 +697,21 @@ def _gdrive_restore_all() -> None:
 
         files = _gdrive_list_files_in_folder(token, folder_id)
 
-        # pick a CSV snapshot
-        # Priority:
-        #  1) artikel_export_latest.csv
-        #  2) newest artikel_export_*.csv (daily snapshots)
-        #  3) newest *.csv in folder (manual uploads like "artikel_export (2).csv")
+        # pick a CSV snapshot (latest)
         csv_file = None
-
-        # 1) explicit latest
         for f in files:
-            if str(f.get("name","")).strip() == "artikel_export_latest.csv":
+            if str(f.get('name','')).strip() == 'artikel_export_latest.csv':
                 csv_file = f
                 break
-
-        # 2) newest daily snapshot
         if not csv_file:
-            cands = [f for f in files if str(f.get("name","")).startswith("artikel_export_") and str(f.get("name","")).lower().endswith(".csv")]
-            cands.sort(key=lambda x: str(x.get("modifiedTime","")), reverse=True)
+            # fallback: newest artikel_export_*.csv
+            cands = [f for f in files if str(f.get('name','')).startswith('artikel_export_') and str(f.get('name','')).lower().endswith('.csv')]
+            # Drive returns modifiedTime; sort desc
+            cands.sort(key=lambda x: str(x.get('modifiedTime','')), reverse=True)
             if cands:
                 csv_file = cands[0]
 
-        # 3) newest any CSV (manual backups)
-        if not csv_file:
-            cands = [f for f in files if str(f.get("name","")).lower().endswith(".csv")]
-            cands.sort(key=lambda x: str(x.get("modifiedTime","")), reverse=True)
-            if cands:
-                csv_file = cands[0]
-
-# restore JSON first (so meta exists even before images)
+        # restore JSON first (so meta exists even before images)
         json_files = [f for f in files if str(f.get("name","")).lower().endswith(".json")]
         jpg_files  = [f for f in files if str(f.get("name","")).lower().endswith(".jpg")]
 
@@ -749,10 +729,7 @@ def _gdrive_restore_all() -> None:
                 continue
             try:
                 data = _gdrive_download_file(token, fid)
-                target = (RAW_DIR / name)
-                if DRIVE_RESTORE_MODE == "MERGE" and target.exists():
-                    continue
-                target.write_bytes(data)
+                (RAW_DIR / name).write_bytes(data)
                 restored += 1
                 json_restored += 1
             except Exception:
@@ -777,10 +754,7 @@ def _gdrive_restore_all() -> None:
                 continue
             try:
                 data = _gdrive_download_file(token, fid)
-                target = (RAW_DIR / name)
-                if DRIVE_RESTORE_MODE == "MERGE" and target.exists():
-                    continue
-                target.write_bytes(data)
+                (RAW_DIR / name).write_bytes(data)
                 restored += 1
                 json_restored += 1
             except Exception:
@@ -1828,6 +1802,167 @@ def describe(artikelnr: str):
     _rebuild_csv_export()
     return JSONResponse({"ok": False, "error": mj["ki_last_error"]}, status_code=502)
 
+
+
+# ----------------------------
+# Admin Ping (für UI Lock-Screen)
+# - Wenn ADMIN_TOKEN leer ist -> 200 ohne Token
+# - Wenn ADMIN_TOKEN gesetzt ist -> 401 ohne Token
+# ----------------------------
+@app.get("/api/admin/ping")
+def admin_ping(request: Request):
+    guard = _admin_guard(request)
+    if guard:
+        return guard
+    return {"ok": True}
+
+# ----------------------------
+# Admin: CSV Import (manuell) – falls Drive Scope Dateien nicht sieht
+# ----------------------------
+from fastapi import UploadFile as _UploadFile
+from fastapi import File as _File
+from fastapi import Form as _Form
+
+def _parse_price_any(s: str) -> float:
+    s = str(s or "").strip().replace("€","").replace(" ", "")
+    if not s:
+        return 0.0
+    if "," in s and "." in s:
+        s = s.replace(".","").replace(",",".")
+    elif "," in s:
+        s = s.replace(",",".")
+    try:
+        return float(s)
+    except Exception:
+        return 0.0
+
+@app.post("/api/admin/import_csv")
+async def admin_import_csv(request: Request, file: _UploadFile = _File(...), overwrite: int = _Form(0)):
+    guard = _admin_guard(request)
+    if guard:
+        return guard
+
+    data = await file.read()
+    txt = data.decode("utf-8-sig", errors="ignore")
+    import csv, io
+    rdr = csv.reader(io.StringIO(txt), delimiter=";")
+    rows = list(rdr)
+    if not rows:
+        return JSONResponse({"ok": False, "error": "CSV leer"}, status_code=400)
+
+    header = [c.strip() for c in rows[0]]
+
+    def idx(name):
+        try:
+            return header.index(name)
+        except Exception:
+            return -1
+
+    i_nr = idx("ArtikelNr")
+    if i_nr < 0:
+        for k in ("artikelnr","ARTIKELNR","Artikelnummer","Artikelnummern"):
+            if k in header:
+                i_nr = header.index(k); break
+    if i_nr < 0:
+        return JSONResponse({"ok": False, "error": "Header 'ArtikelNr' nicht gefunden"}, status_code=400)
+
+    i_title = idx("Bezeichnung")
+    i_desc  = idx("Beschreibung")
+    i_menge = idx("Menge")
+    i_preis = idx("Preis")
+    i_lp    = idx("Ladenpreis")
+    i_lager = idx("Lagerort")
+    i_ls    = idx("Lagerstand")
+    i_ueb   = idx("Uebernehmen")
+    i_sort  = idx("Sortiment")
+    i_einl  = idx("Einlieferer-ID")
+    i_ang   = idx("Angeliefert")
+    i_bm    = idx("Betriebsmittel")
+    i_ma    = idx("Mitarbeiter")
+
+    created = 0
+    skipped = 0
+    updated = 0
+    now = int(time.time())
+
+    for r in rows[1:]:
+        if not r or len(r) <= i_nr:
+            continue
+        nr = str(r[i_nr]).strip()
+        if not nr.isdigit():
+            continue
+
+        mp = _meta_path(nr)
+        exists = mp.exists()
+        if exists and not overwrite:
+            skipped += 1
+            continue
+
+        mj = _load_meta_json(nr) if exists else _default_meta(nr)
+
+        if i_title >= 0 and i_title < len(r): mj["titel"] = str(r[i_title]).strip()
+        if i_desc  >= 0 and i_desc  < len(r): mj["beschreibung"] = str(r[i_desc]).strip()
+        if i_lager >= 0 and i_lager < len(r): mj["lagerort"] = str(r[i_lager]).strip()
+        if i_ma    >= 0 and i_ma    < len(r): mj["mitarbeiter"] = str(r[i_ma]).strip()
+
+        if i_sort  >= 0 and i_sort  < len(r):
+            mj["sortiment_id"] = str(r[i_sort]).strip()
+            mj["sortiment_name"] = _sortiment_name_by_id(mj["sortiment_id"])
+
+        if i_einl >= 0 and i_einl < len(r):
+            mj["einlieferer_id"] = str(r[i_einl]).strip()
+            mj["einlieferer"] = mj["einlieferer_id"]
+
+        if i_ang >= 0 and i_ang < len(r): mj["angeliefert"] = str(r[i_ang]).strip()
+        if i_bm  >= 0 and i_bm  < len(r): mj["betriebsmittel"] = str(r[i_bm]).strip()
+
+        if i_menge >= 0 and i_menge < len(r):
+            try: mj["menge"] = int(str(r[i_menge]).strip() or "1")
+            except Exception: mj["menge"] = 1
+        if i_ls >= 0 and i_ls < len(r):
+            try: mj["lagerstand"] = int(str(r[i_ls]).strip() or "1")
+            except Exception: mj["lagerstand"] = 1
+        if i_ueb >= 0 and i_ueb < len(r):
+            try: mj["uebernehmen"] = int(str(r[i_ueb]).strip() or "1")
+            except Exception: mj["uebernehmen"] = 1
+
+        if i_preis >= 0 and i_preis < len(r):
+            mj["rufpreis"] = _parse_price_any(r[i_preis])
+        if i_lp >= 0 and i_lp < len(r):
+            mj["retail_price"] = _parse_price_any(r[i_lp])
+
+        if not exists:
+            mj["created_at"] = now
+            created += 1
+        else:
+            updated += 1
+
+        mj["ki_source"] = mj.get("ki_source") or "imported"
+        _save_meta_json(nr, mj)
+
+    _rebuild_csv_export()
+    return {"ok": True, "created": created, "updated": updated, "skipped": skipped, "overwrite": int(overwrite)}
+
+@app.post("/api/admin/restore_now")
+def admin_restore_now(request: Request):
+    guard = _admin_guard(request)
+    if guard:
+        return guard
+    try:
+        try:
+            if RESTORE_MARKER.exists():
+                RESTORE_MARKER.unlink()
+        except Exception:
+            pass
+        _gdrive_restore_all()
+        status = ""
+        try:
+            status = RESTORE_MARKER.read_text("utf-8") if RESTORE_MARKER.exists() else "no_marker"
+        except Exception:
+            status = "unknown"
+        return {"ok": True, "status": status}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 # ----------------------------
 # Admin API (Token geschützt)

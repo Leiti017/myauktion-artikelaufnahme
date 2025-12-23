@@ -55,6 +55,7 @@
         <div>
           <div class="text-lg font-bold">CSV Export</div>
           <div class="text-xs opacity-80">Exportiere deine Artikel als Excel-kompatible CSV (mit Von/Bis Bereich).</div>
+<div class="text-xs opacity-80 mt-2">Neu: Restore/Import (für Drive/Updates).</div>
         </div>
         <div class="glass rounded-2xl p-3 mb-3">
   <div class="text-sm font-semibold mb-2">CSV Export</div>
@@ -77,6 +78,16 @@
     </div>
   </div>
   <div class="text-[11px] opacity-70 mt-2">Leer lassen = kompletter Export.</div>
+  <div class="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2">
+    <button id="btn-restore-now" class="btn btn-primary w-full sm:w-auto" type="button">Restore jetzt (Drive)</button>
+    <label class="btn btn-primary w-full sm:w-auto" style="justify-content:center;cursor:pointer;">
+      CSV importieren
+      <input id="import-file" type="file" accept=".csv,text/csv" style="display:none">
+    </label>
+    <button id="btn-import-run" class="btn btn-primary w-full sm:w-auto" type="button">Import starten</button>
+  </div>
+  <div id="import-status" class="text-[11px] opacity-80 mt-2"></div>
+
 </div>
       </div>
     </section>
@@ -391,6 +402,17 @@ ID: " + id)) return;
   async function init(){
     const t = getToken();
     if(!t){
+      // Wenn Server kein ADMIN_TOKEN gesetzt hat, ist Admin offen -> ping testen
+      try{
+        const r = await fetch('/api/admin/ping');
+        if(r.ok){
+          locked.classList.add('hidden');
+          content.classList.remove('hidden');
+          await loadSortimente();
+          await refresh();
+          return;
+        }
+      }catch(e){}
       locked.classList.remove("hidden");
       content.classList.add("hidden");
       return;
@@ -528,7 +550,70 @@ if(btnExportImages){
     window.location.href = url;
   });
 }
+
+  // Restore/Import
+  const btnRestoreNow = document.getElementById('btn-restore-now');
+  const importFile = document.getElementById('import-file');
+  const btnImportRun = document.getElementById('btn-import-run');
+  const importStatus = document.getElementById('import-status');
+  let _importPicked = null;
+
+  if(importFile){
+    importFile.addEventListener('change', ()=>{
+      _importPicked = (importFile.files && importFile.files[0]) ? importFile.files[0] : null;
+      if(importStatus) importStatus.textContent = _importPicked ? ("Ausgewählt: " + _importPicked.name) : "";
+    });
+  }
+
+  if(btnRestoreNow){
+    btnRestoreNow.addEventListener('click', async ()=>{
+      try{
+        if(importStatus) importStatus.textContent = "Restore läuft …";
+        const t = getToken();
+        const res = await fetch('/api/admin/restore_now', { method:'POST', headers: { ...(t ? {'X-Admin-Token': t} : {}) } });
+        const j = await res.json();
+        if(!res.ok || !j.ok){
+          if(importStatus) importStatus.textContent = "Restore Fehler: " + (j.error || res.status);
+          return;
+        }
+        if(importStatus) importStatus.textContent = "Restore OK: " + (j.status || "ok");
+        await loadSortimente();
+        await refresh();
+      }catch(e){
+        if(importStatus) importStatus.textContent = "Restore Fehler: " + String(e);
+      }
+    });
+  }
+
+  if(btnImportRun){
+    btnImportRun.addEventListener('click', async ()=>{
+      try{
+        if(!_importPicked){
+          alert("Bitte zuerst eine CSV auswählen.");
+          return;
+        }
+        if(importStatus) importStatus.textContent = "Import läuft …";
+        const t = getToken();
+        const fd = new FormData();
+        fd.append('file', _importPicked);
+        fd.append('overwrite', '0');
+        const res = await fetch('/api/admin/import_csv', { method:'POST', headers: { ...(t ? {'X-Admin-Token': t} : {}) }, body: fd });
+        const j = await res.json();
+        if(!res.ok || !j.ok){
+          if(importStatus) importStatus.textContent = "Import Fehler: " + (j.error || res.status);
+          return;
+        }
+        if(importStatus) importStatus.textContent = `Import OK: created=${j.created}, updated=${j.updated}, skipped=${j.skipped}`;
+        await loadSortimente();
+        await refresh();
+      }catch(e){
+        if(importStatus) importStatus.textContent = "Import Fehler: " + String(e);
+      }
+    });
+  }
+
   init();
+
 </script>
 </body>
 </html>
