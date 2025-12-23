@@ -585,6 +585,12 @@ def _gdrive_backup_article(artikelnr: str) -> None:
 # ----------------------------
 RESTORE_MARKER = EXPORT_DIR / "restore_done.marker"
 
+# Restore Verhalten:
+# - Standard: nur restore wenn lokal noch KEINE Daten vorhanden sind (EMPTY)
+# - Optional: erzwinge Restore bei jedem Start (ALWAYS) – z.B. für Deploy/Update
+#   Setze ENV: DRIVE_RESTORE_MODE=ALWAYS
+DRIVE_RESTORE_MODE = (os.getenv("DRIVE_RESTORE_MODE", "EMPTY") or "EMPTY").strip().upper()
+
 def _gdrive_list_files_in_folder(token: str, folder_id: str):
     files = []
     page_token = None
@@ -675,9 +681,9 @@ def _restore_jsons_from_csv(csv_bytes: bytes) -> int:
 def _gdrive_restore_all() -> None:
     if not _gdrive_enabled():
         return
-    # only once per deploy/container
+    # only once per deploy/container (außer DRIVE_RESTORE_MODE=ALWAYS)
     try:
-        if RESTORE_MARKER.exists():
+        if DRIVE_RESTORE_MODE != "ALWAYS" and RESTORE_MARKER.exists():
             return
     except Exception:
         pass
@@ -686,12 +692,14 @@ def _gdrive_restore_all() -> None:
         token = _gdrive_access_token()
         folder_id = _gdrive_get_folder_id(token)
 
-        # If we already have data (e.g. dev/local), skip restore
+        # Wenn lokal schon Daten existieren, standardmäßig NICHT überschreiben (Mode=EMPTY).
+        # Bei Mode=ALWAYS wird trotzdem aus Drive eingespielt (für Deploy/Update).
         try:
-            has_any = any(RAW_DIR.glob("*.json")) or any(RAW_DIR.glob("*.jpg"))
-            if has_any:
-                RESTORE_MARKER.write_text("skip_existing", "utf-8")
-                return
+            if DRIVE_RESTORE_MODE != "ALWAYS":
+                has_any = any(RAW_DIR.glob("*.json")) or any(RAW_DIR.glob("*.jpg"))
+                if has_any:
+                    RESTORE_MARKER.write_text("skip_existing", "utf-8")
+                    return
         except Exception:
             pass
 
@@ -719,6 +727,7 @@ def _gdrive_restore_all() -> None:
 
         restored = 0
         json_restored = 0
+        image_restored = 0
         for f in json_files:
             name = str(f.get("name","") or "")
             fid = str(f.get("id","") or "")
@@ -731,7 +740,7 @@ def _gdrive_restore_all() -> None:
                 data = _gdrive_download_file(token, fid)
                 (RAW_DIR / name).write_bytes(data)
                 restored += 1
-                json_restored += 1
+                image_restored += 1
             except Exception:
                 pass
 
@@ -756,7 +765,7 @@ def _gdrive_restore_all() -> None:
                 data = _gdrive_download_file(token, fid)
                 (RAW_DIR / name).write_bytes(data)
                 restored += 1
-                json_restored += 1
+                image_restored += 1
             except Exception:
                 pass
 
