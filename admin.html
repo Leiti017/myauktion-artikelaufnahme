@@ -37,7 +37,8 @@
 
   <div id="locked" class="glass rounded-3xl p-6 shadow-xl hidden">
     <div class="text-lg font-bold mb-2">Admin geschützt</div>
-    <p class="text-sm opacity-90 mb-4">Bitte Admin-Token eingeben, damit Budget & Admin-Flags sichtbar sind.</p>
+    <p class="text-sm opacity-90 mb-2">Bitte Admin-Token eingeben, damit Budget & Admin-Flags sichtbar sind.</p>
+    <div id="lock-error" class="text-xs hidden mb-2" style="color:#fecaca"></div>
     <div class="grid md:grid-cols-3 gap-3 items-end">
       <div class="md:col-span-2">
         <label class="text-xs opacity-80">Admin-Token</label>
@@ -411,6 +412,16 @@ ID: " + id)) return;
       await loadSortimente();
       await refresh();
     }catch(e){
+      // Token falsch oder Server nicht erreichbar
+      try{
+        const box = document.getElementById('lock-error');
+        if(box){
+          box.textContent = (String(e||'') === 'Error: unauthorized') ? 'Token falsch – bitte erneut eingeben.' : ('Fehler: ' + String(e));
+          box.classList.remove('hidden');
+        }
+      }catch(_){}
+      // falschen Token nicht „festklemmen“
+      try{ localStorage.removeItem('MYAUKTION_ADMIN_TOKEN'); }catch(_){ }
       locked.classList.remove("hidden");
       content.classList.add("hidden");
     }
@@ -421,6 +432,8 @@ ID: " + id)) return;
   if(btnSortAdd){ btnSortAdd.onclick = addSortiment; }
 
   btnUnlock.onclick = async ()=>{
+    try{ const box=document.getElementById('lock-error'); if(box){ box.classList.add('hidden'); box.textContent=''; } }catch(_){}
+
     const t = (tokenInp.value || "").trim();
     if(!t) return;
     setToken(t);
