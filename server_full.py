@@ -584,12 +584,13 @@ def _gdrive_backup_article(artikelnr: str) -> None:
 # - Läuft im Background-Thread (damit Startup schnell bleibt)
 # ----------------------------
 RESTORE_MARKER = EXPORT_DIR / "restore_done.marker"
-
-# Restore Verhalten:
-# - Standard: nur restore wenn lokal noch KEINE Daten vorhanden sind (EMPTY)
-# - Optional: erzwinge Restore bei jedem Start (ALWAYS) – z.B. für Deploy/Update
-#   Setze ENV: DRIVE_RESTORE_MODE=ALWAYS
+# Restore mode:
+#  - EMPTY (default): restore only if local uploads/raw is empty
+#  - MERGE: restore missing files even if some local data exists (never overwrite)
+#  - ALWAYS: always restore (overwrite local files)
 DRIVE_RESTORE_MODE = (os.getenv("DRIVE_RESTORE_MODE", "EMPTY") or "EMPTY").strip().upper()
+# Set to 1 to ignore restore marker and run restore again
+DRIVE_RESTORE_FORCE = (os.getenv("DRIVE_RESTORE_FORCE", "0") or "0").strip() in ("1","true","TRUE","yes","YES")
 
 def _gdrive_list_files_in_folder(token: str, folder_id: str):
     files = []
@@ -681,9 +682,9 @@ def _restore_jsons_from_csv(csv_bytes: bytes) -> int:
 def _gdrive_restore_all() -> None:
     if not _gdrive_enabled():
         return
-    # only once per deploy/container (außer DRIVE_RESTORE_MODE=ALWAYS)
+    # only once per deploy/container
     try:
-        if DRIVE_RESTORE_MODE != "ALWAYS" and RESTORE_MARKER.exists():
+        if (not DRIVE_RESTORE_FORCE) and RESTORE_MARKER.exists():
             return
     except Exception:
         pass
@@ -692,34 +693,45 @@ def _gdrive_restore_all() -> None:
         token = _gdrive_access_token()
         folder_id = _gdrive_get_folder_id(token)
 
-        # Wenn lokal schon Daten existieren, standardmäßig NICHT überschreiben (Mode=EMPTY).
-        # Bei Mode=ALWAYS wird trotzdem aus Drive eingespielt (für Deploy/Update).
+        # If we already have data (e.g. dev/local), skip restore
         try:
-            if DRIVE_RESTORE_MODE != "ALWAYS":
-                has_any = any(RAW_DIR.glob("*.json")) or any(RAW_DIR.glob("*.jpg"))
-                if has_any:
-                    RESTORE_MARKER.write_text("skip_existing", "utf-8")
-                    return
+            has_any = any(RAW_DIR.glob("*.json")) or any(RAW_DIR.glob("*.jpg"))
+            if has_any:
+                RESTORE_MARKER.write_text("skip_existing", "utf-8")
+                return
         except Exception:
             pass
 
         files = _gdrive_list_files_in_folder(token, folder_id)
 
-        # pick a CSV snapshot (latest)
+        # pick a CSV snapshot
+        # Priority:
+        #  1) artikel_export_latest.csv
+        #  2) newest artikel_export_*.csv (daily snapshots)
+        #  3) newest *.csv in folder (manual uploads like "artikel_export (2).csv")
         csv_file = None
+
+        # 1) explicit latest
         for f in files:
-            if str(f.get('name','')).strip() == 'artikel_export_latest.csv':
+            if str(f.get("name","")).strip() == "artikel_export_latest.csv":
                 csv_file = f
                 break
+
+        # 2) newest daily snapshot
         if not csv_file:
-            # fallback: newest artikel_export_*.csv
-            cands = [f for f in files if str(f.get('name','')).startswith('artikel_export_') and str(f.get('name','')).lower().endswith('.csv')]
-            # Drive returns modifiedTime; sort desc
-            cands.sort(key=lambda x: str(x.get('modifiedTime','')), reverse=True)
+            cands = [f for f in files if str(f.get("name","")).startswith("artikel_export_") and str(f.get("name","")).lower().endswith(".csv")]
+            cands.sort(key=lambda x: str(x.get("modifiedTime","")), reverse=True)
             if cands:
                 csv_file = cands[0]
 
-        # restore JSON first (so meta exists even before images)
+        # 3) newest any CSV (manual backups)
+        if not csv_file:
+            cands = [f for f in files if str(f.get("name","")).lower().endswith(".csv")]
+            cands.sort(key=lambda x: str(x.get("modifiedTime","")), reverse=True)
+            if cands:
+                csv_file = cands[0]
+
+# restore JSON first (so meta exists even before images)
         json_files = [f for f in files if str(f.get("name","")).lower().endswith(".json")]
         jpg_files  = [f for f in files if str(f.get("name","")).lower().endswith(".jpg")]
 
@@ -727,7 +739,6 @@ def _gdrive_restore_all() -> None:
 
         restored = 0
         json_restored = 0
-        image_restored = 0
         for f in json_files:
             name = str(f.get("name","") or "")
             fid = str(f.get("id","") or "")
@@ -738,9 +749,12 @@ def _gdrive_restore_all() -> None:
                 continue
             try:
                 data = _gdrive_download_file(token, fid)
-                (RAW_DIR / name).write_bytes(data)
+                target = (RAW_DIR / name)
+                if DRIVE_RESTORE_MODE == "MERGE" and target.exists():
+                    continue
+                target.write_bytes(data)
                 restored += 1
-                image_restored += 1
+                json_restored += 1
             except Exception:
                 pass
 
@@ -763,9 +777,12 @@ def _gdrive_restore_all() -> None:
                 continue
             try:
                 data = _gdrive_download_file(token, fid)
-                (RAW_DIR / name).write_bytes(data)
+                target = (RAW_DIR / name)
+                if DRIVE_RESTORE_MODE == "MERGE" and target.exists():
+                    continue
+                target.write_bytes(data)
                 restored += 1
-                image_restored += 1
+                json_restored += 1
             except Exception:
                 pass
 
