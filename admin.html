@@ -222,7 +222,7 @@ function getToken(){
   try{
     const qs = new URLSearchParams(location.search);
     const t = qs.get("t");
-    if(t && t.length > 10){
+    if(t){
       localStorage.setItem("MYAUKTION_ADMIN_TOKEN", t);
       return t;
     }

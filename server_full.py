@@ -608,6 +608,70 @@ def _gdrive_download_file(token: str, file_id: str) -> bytes:
     r.raise_for_status()
     return r.content
 
+
+def _restore_jsons_from_csv(csv_bytes: bytes) -> int:
+    """Fallback: wenn im Drive keine *.json existieren, rekonstruieren wir minimale Meta-JSONs aus CSV.
+    Damit bleiben alte Artikel sichtbar und editierbar.
+    """
+    try:
+        RAW_DIR.mkdir(parents=True, exist_ok=True)
+        txt = csv_bytes.decode("utf-8-sig", errors="ignore")
+        f = io.StringIO(txt)
+        reader = csv.DictReader(f, delimiter=";")
+        restored = 0
+        now = int(time.time())
+        for row in reader:
+            nr = str(row.get("ArtikelNr","") or row.get("artikelnr","") or "").strip()
+            if not nr.isdigit():
+                continue
+            meta_path = RAW_DIR / f"{nr}.json"
+            if meta_path.exists():
+                continue
+            # Map common columns
+            titel = str(row.get("Bezeichnung","") or row.get("Titel","") or "").strip()
+            lagerort = str(row.get("Lagerort","") or "").strip()
+            mitarbeiter = str(row.get("Mitarbeiter","") or "").strip()
+            sortiment_id = str(row.get("Sortiment","") or "").strip()
+            # prices may be "12,34" -> float
+            def _p(x):
+                s = str(x or "").strip().replace("€","").replace(" ","")
+                s = s.replace(".","").replace(",",".") if "," in s else s
+                try: return float(s)
+                except Exception: return 0.0
+            rufpreis = _p(row.get("Rufpreis",""))
+            retail = _p(row.get("Listenpreis",""))
+            menge = row.get("Menge","")
+            try:
+                menge = int(str(menge).strip() or "1")
+            except Exception:
+                menge = 1
+
+            meta = {
+                "artikelnr": nr,
+                "titel": titel,
+                "beschreibung": "",
+                "kategorie": "",
+                "lagerort": lagerort,
+                "einlieferer": "",
+                "mitarbeiter": mitarbeiter,
+                "menge": menge,
+                "rufpreis": rufpreis,
+                "retail_price": retail,
+                "sortiment_id": sortiment_id,
+                "sortiment_name": "",
+                "sortiment": "",
+                "created_at": now,
+                "updated_at": now,
+                "reviewed": False,
+                "ki_source": "imported",
+                "ki_last_error": ""
+            }
+            meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), "utf-8")
+            restored += 1
+        return restored
+    except Exception:
+        return 0
+
 def _gdrive_restore_all() -> None:
     if not _gdrive_enabled():
         return
@@ -633,6 +697,20 @@ def _gdrive_restore_all() -> None:
 
         files = _gdrive_list_files_in_folder(token, folder_id)
 
+        # pick a CSV snapshot (latest)
+        csv_file = None
+        for f in files:
+            if str(f.get('name','')).strip() == 'artikel_export_latest.csv':
+                csv_file = f
+                break
+        if not csv_file:
+            # fallback: newest artikel_export_*.csv
+            cands = [f for f in files if str(f.get('name','')).startswith('artikel_export_') and str(f.get('name','')).lower().endswith('.csv')]
+            # Drive returns modifiedTime; sort desc
+            cands.sort(key=lambda x: str(x.get('modifiedTime','')), reverse=True)
+            if cands:
+                csv_file = cands[0]
+
         # restore JSON first (so meta exists even before images)
         json_files = [f for f in files if str(f.get("name","")).lower().endswith(".json")]
         jpg_files  = [f for f in files if str(f.get("name","")).lower().endswith(".jpg")]
@@ -640,6 +718,7 @@ def _gdrive_restore_all() -> None:
         RAW_DIR.mkdir(parents=True, exist_ok=True)
 
         restored = 0
+        json_restored = 0
         for f in json_files:
             name = str(f.get("name","") or "")
             fid = str(f.get("id","") or "")
@@ -652,6 +731,15 @@ def _gdrive_restore_all() -> None:
                 data = _gdrive_download_file(token, fid)
                 (RAW_DIR / name).write_bytes(data)
                 restored += 1
+                json_restored += 1
+            except Exception:
+                pass
+
+        # Fallback: wenn keine JSONs im Drive liegen, rekonstruiere Meta aus CSV
+        if json_restored == 0 and csv_file and csv_file.get('id'):
+            try:
+                csv_bytes = _gdrive_download_file(token, str(csv_file.get('id')))
+                restored += _restore_jsons_from_csv(csv_bytes)
             except Exception:
                 pass
 
@@ -668,6 +756,7 @@ def _gdrive_restore_all() -> None:
                 data = _gdrive_download_file(token, fid)
                 (RAW_DIR / name).write_bytes(data)
                 restored += 1
+                json_restored += 1
             except Exception:
                 pass
 
