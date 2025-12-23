@@ -84,7 +84,7 @@
           <div class="text-xs opacity-80">Anlegen / umbennen / löschen – bleibt gespeichert und ist in den Einstellungen auswählbar.</div>
         </div>
         <div class="flex gap-2 w-full md:w-auto">
-          <input id="sort-add" class="input" placeholder="z.B. (22) Tiernahrung 45">
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-2 w-full md:w-auto"><input id="sort-add" class="input" placeholder="Name z.B. (22) Drogerie/Kosmetik 85"><input id="sort-add-id" class="input" placeholder="ID z.B. 2349 (leer = auto)"></div>
           <button id="btn-sort-add" class="btn btn-primary" type="button">Hinzufügen</button>
         </div>
       </div>
@@ -290,9 +290,9 @@ function setToken(t){
       const items = (js.items||[]);
       if(fSort){
         const cur = (fSort.value || "").trim();
-        fSort.innerHTML = '<option value="">Alle</option>' + items.map(x=>{
-          const v = String(x).replaceAll('"','&quot;');
-          return `<option value="${v}">${v}</option>`;
+        fSort.innerHTML = '<option value="">Alle</option>' + items.map(it=>{
+          const name = String(it.name ?? "").replaceAll('"','&quot;');
+          return `<option value="${name}">${name}</option>`;
         }).join('');
         if(cur) fSort.value = cur;
       }
@@ -304,14 +304,18 @@ function setToken(t){
   function renderSortimente(items){
     const box = document.getElementById('sort-list');
     if(!box) return;
-    box.innerHTML = (items||[]).map(n=>{
-      const safe = String(n).replaceAll("<","&lt;");
+    box.innerHTML = (items||[]).map(it=>{
+      const id = String(it.id ?? "").replaceAll("<","&lt;").replaceAll('"','&quot;');
+      const name = String(it.name ?? "").replaceAll("<","&lt;");
       return `
         <div class="flex items-center justify-between gap-2 py-1 border-b border-white/10">
-          <div class="text-sm">${safe}</div>
+          <div class="text-sm">
+            <div class="font-semibold">${name}</div>
+            <div class="text-xs opacity-80">ID: ${id}</div>
+          </div>
           <div class="flex gap-2">
-            <button class="btn btn-primary" style="padding:.25rem .7rem;font-size:.75rem" onclick="renameSortiment('${safe.replaceAll("'","&#39;")}')">Umbennen</button>
-            <button class="btn btn-primary" style="padding:.25rem .7rem;font-size:.75rem" onclick="deleteSortiment('${safe.replaceAll("'","&#39;")}')">Löschen</button>
+            <button class="btn btn-primary" style="padding:.25rem .7rem;font-size:.75rem" onclick="renameSortiment('${id}')">Umbenennen</button>
+            <button class="btn btn-primary" style="padding:.25rem .7rem;font-size:.75rem" onclick="deleteSortiment('${id}')">Löschen</button>
           </div>
         </div>
       `;
@@ -320,25 +324,34 @@ function setToken(t){
 
   async function addSortiment(){
     const inp = document.getElementById('sort-add');
+    const inpId = document.getElementById('sort-add-id');
     const name = (inp?.value || "").trim();
+    const id = (inpId?.value || "").trim();
     if(!name) return;
-    await apiPost("/api/admin/sortimente/add", {name});
+    await apiPost("/api/admin/sortimente/add", {name, id});
     inp.value = "";
+    if(inpId) inpId.value = "";
     await loadSortimente();
     await refresh();
   }
 
-  async function renameSortiment(oldName){
+  async function renameSortiment(id){
+    const js = await api("/api/admin/sortimente");
+    const items = (js.items||[]);
+    const cur = items.find(x => String(x.id) === String(id));
+    const oldName = cur ? String(cur.name||"") : "";
     const nn = prompt("Neuer Name für Sortiment:", oldName);
     if(!nn) return;
-    await apiPost("/api/admin/sortimente/rename", {old: oldName, new: nn});
+    await apiPost("/api/admin/sortimente/rename", {id, new: nn});
     await loadSortimente();
     await refresh();
   }
 
-  async function deleteSortiment(name){
-    if(!confirm("Sortiment wirklich löschen?\n\n" + name)) return;
-    await apiPost("/api/admin/sortimente/delete", {name});
+  async function deleteSortiment(id){
+    if(!confirm("Sortiment wirklich löschen?
+
+ID: " + id)) return;
+    await apiPost("/api/admin/sortimente/delete", {id});
     await loadSortimente();
     await refresh();
   }

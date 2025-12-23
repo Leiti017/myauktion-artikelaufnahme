@@ -316,7 +316,7 @@ def _update_csv_row_for_art(artikelnr: str, meta: Dict[str, Any]) -> None:
     lagerort = str(meta.get("lagerort") or "")
     lagerstand = int(meta.get("lagerstand") or 1)
     uebernehmen = int(meta.get("uebernehmen") or 1)
-    sortiment = str(meta.get("sortiment") or "")
+    sortiment = str(meta.get("sortiment_id") or "")
     einl_id = str(meta.get("einlieferer_id") or meta.get("einlieferer") or "")
     angel = str(meta.get("angeliefert") or "")
     betr = str(meta.get("betriebsmittel") or "")
@@ -598,6 +598,8 @@ def _default_meta(artikelnr: str) -> Dict[str, Any]:
         "mitarbeiter": "",
         "lagerstand": 1,
         "sortiment": "",
+        "sortiment_id": "",
+        "sortiment_name": "",
         "reviewed": False,
         "ki_source": "",          # pending | realtime | failed | ""
         "ki_last_error": "",
@@ -702,7 +704,7 @@ def _rebuild_csv_export() -> None:
             "Lagerort": str(d.get("lagerort", "") or ""),
             "Lagerstand": int(d.get("lagerstand", 1) or 1),
             "Uebernehmen": int(d.get("uebernehmen", 1) or 1),
-            "Sortiment": str(d.get("sortiment", "") or ""),
+            "Sortiment": str(d.get("sortiment_id", "") or ""),
             "Einlieferer-ID": str(d.get("einlieferer_id", d.get("einlieferer", "")) or ""),
             "Angeliefert": str(d.get("angeliefert", "") or ""),
             "Betriebsmittel": str(d.get("betriebsmittel", "") or ""),
@@ -816,32 +818,117 @@ def _run_meta_background(artikelnr: str, img_path: Path) -> None:
 
 # ----------------------------
 # Sortimente (persistent, Admin verwaltbar)
+# - Ab jetzt: jedes Sortiment hat ID + Name.
+# - JSON Format (export/sortimente.json):
+#     [{"id":2349,"name":"(22) Drogerie/Kosmetik 85"}, ...]
+# - Backward compatible: falls altes Format ["(22) ...", ...] -> wird beim Laden in IDs umgewandelt.
 # ----------------------------
 SORTIMENTE_JSON = EXPORT_DIR / "sortimente.json"
 
-def _default_sortimente() -> list[str]:
-    # Beispiele (kannst du im Admin ändern)
-    return ["(22) Tiernahrung 45"]
+def _default_sortimente() -> list[dict]:
+    return [{"id": 2349, "name": "(22) Tiernahrung 45"}]
 
-def _load_sortimente() -> list[str]:
+def _next_sortiment_id(items: list[dict]) -> int:
+    mx = 0
+    for it in (items or []):
+        try:
+            mx = max(mx, int(it.get("id", 0) or 0))
+        except Exception:
+            pass
+    return mx + 1 if mx else 1000
+
+def _normalize_sortimente(data) -> list[dict]:
+    out: list[dict] = []
+    if not isinstance(data, list):
+        return out
+
+    # old format: list[str]
+    if data and all(isinstance(x, str) for x in data):
+        nid = 1000
+        for s in data:
+            name = str(s).strip()
+            if not name:
+                continue
+            out.append({"id": nid, "name": name})
+            nid += 1
+        return out
+
+    # new format: list[dict]
+    for x in data:
+        if not isinstance(x, dict):
+            continue
+        try:
+            sid = int(x.get("id", 0) or 0)
+        except Exception:
+            sid = 0
+        name = str(x.get("name", "") or "").strip()
+        if not sid or not name:
+            continue
+        out.append({"id": sid, "name": name})
+
+    # de-dupe by id (first wins)
+    seen = set()
+    dedup = []
+    for it in out:
+        if it["id"] in seen:
+            continue
+        seen.add(it["id"])
+        dedup.append(it)
+    return dedup
+
+def _load_sortimente() -> list[dict]:
     if SORTIMENTE_JSON.exists():
         try:
             data = json.loads(SORTIMENTE_JSON.read_text("utf-8"))
-            if isinstance(data, list):
-                return [str(x).strip() for x in data if str(x).strip()]
+            items = _normalize_sortimente(data)
+            if items:
+                # persist legacy -> new format
+                if data and all(isinstance(x, str) for x in data):
+                    _save_sortimente(items)
+                return items
         except Exception:
             pass
-    return _default_sortimente()
+    items = _default_sortimente()
+    try:
+        if not SORTIMENTE_JSON.exists():
+            _save_sortimente(items)
+    except Exception:
+        pass
+    return items
 
-def _save_sortimente(items: list[str]) -> None:
+def _save_sortimente(items: list[dict]) -> None:
     cleaned = []
-    for x in items:
-        s = str(x).strip()
-        if not s:
+    seen_ids = set()
+    for x in (items or []):
+        if not isinstance(x, dict):
             continue
-        if s not in cleaned:
-            cleaned.append(s)
+        try:
+            sid = int(x.get("id", 0) or 0)
+        except Exception:
+            continue
+        name = str(x.get("name", "") or "").strip()
+        if not sid or not name:
+            continue
+        if sid in seen_ids:
+            continue
+        seen_ids.add(sid)
+        cleaned.append({"id": sid, "name": name})
     SORTIMENTE_JSON.write_text(json.dumps(cleaned, ensure_ascii=False, indent=2), "utf-8")
+
+def _sortiment_name_by_id(sortiment_id: str | int) -> str:
+    try:
+        sid = int(str(sortiment_id).strip() or 0)
+    except Exception:
+        sid = 0
+    if not sid:
+        return ""
+    for it in _load_sortimente():
+        try:
+            if int(it.get("id", 0) or 0) == sid:
+                return str(it.get("name", "") or "").strip()
+        except Exception:
+            continue
+    return ""
 
 
 # ----------------------------
@@ -868,7 +955,8 @@ def _list_articles() -> list[dict]:
             "artikelnr": nr,
             "titel": mj.get("titel", "") or "",
             "beschreibung": mj.get("beschreibung", "") or "",
-            "sortiment": (mj.get("sortiment", "") or "").strip(),
+            "sortiment": (mj.get("sortiment_name", "") or mj.get("sortiment", "") or "").strip(),
+            "sortiment_id": str(mj.get("sortiment_id", "") or ""),
             "lagerort": mj.get("lagerort", "") or "",
             "menge": int(mj.get("menge", 1) or 1),
             "rufpreis": mj.get("rufpreis", 0.0) or 0.0,
@@ -1334,9 +1422,23 @@ def save(data: Dict[str, Any]):
     mj = _load_meta_json(artikelnr)
 
     # Textfelder
-    for k in ["titel", "beschreibung", "lagerort", "einlieferer", "mitarbeiter", "kategorie", "sortiment"]:
+    for k in ["titel", "beschreibung", "lagerort", "einlieferer", "mitarbeiter", "kategorie"]:
         if k in data and data[k] is not None:
             mj[k] = str(data[k])
+    # Sortiment: prefer sortiment_id (numeric). Name wird aus ID abgeleitet.
+    # Backward compatible: falls noch 'sortiment' Name kommt, speichern wir es als sortiment_name und versuchen ID zu finden.
+    if "sortiment_id" in data and data.get("sortiment_id") is not None:
+        sid = str(data.get("sortiment_id") or "").strip()
+        mj["sortiment_id"] = sid
+        mj["sortiment_name"] = _sortiment_name_by_id(sid)
+    elif "sortiment" in data and data.get("sortiment") is not None:
+        mj["sortiment_name"] = str(data.get("sortiment") or "").strip()
+        nm = mj["sortiment_name"]
+        for it in _load_sortimente():
+            if str(it.get("name","")).strip().lower() == nm.lower():
+                mj["sortiment_id"] = str(it.get("id"))
+                break
+
 
     # Settings-Felder (für CSV Export)
     if "menge" in data: mj["menge"] = int(data.get("menge") or 1)
@@ -1450,10 +1552,25 @@ def admin_sortimente_add(request: Request, data: Dict[str, Any]):
     name = str(data.get("name", "") or "").strip()
     if not name:
         return JSONResponse({"ok": False, "error": "name fehlt"}, status_code=400)
+
     items = _load_sortimente()
-    if name not in items:
-        items.append(name)
-        _save_sortimente(items)
+    sid_raw = str(data.get("id", "") or "").strip()
+    if sid_raw:
+        try:
+            sid = int(sid_raw)
+        except Exception:
+            return JSONResponse({"ok": False, "error": "id ungültig"}, status_code=400)
+    else:
+        sid = _next_sortiment_id(items)
+
+    for it in items:
+        if int(it.get("id", 0) or 0) == sid:
+            return JSONResponse({"ok": False, "error": "id existiert bereits"}, status_code=400)
+        if str(it.get("name","")).strip().lower() == name.lower():
+            return JSONResponse({"ok": False, "error": "name existiert bereits"}, status_code=400)
+
+    items.append({"id": sid, "name": name})
+    _save_sortimente(items)
     return {"ok": True, "items": _load_sortimente()}
 
 
@@ -1462,12 +1579,25 @@ def admin_sortimente_rename(request: Request, data: Dict[str, Any]):
     guard = _admin_guard(request)
     if guard:
         return guard
-    old = str(data.get("old", "") or "").strip()
+    sid_raw = str(data.get("id", "") or "").strip()
     new = str(data.get("new", "") or "").strip()
-    if not old or not new:
-        return JSONResponse({"ok": False, "error": "old/new fehlt"}, status_code=400)
+    if not sid_raw or not new:
+        return JSONResponse({"ok": False, "error": "id/new fehlt"}, status_code=400)
+    try:
+        sid = int(sid_raw)
+    except Exception:
+        return JSONResponse({"ok": False, "error": "id ungültig"}, status_code=400)
+
     items = _load_sortimente()
-    items = [new if x == old else x for x in items]
+    found = False
+    for it in items:
+        if int(it.get("id", 0) or 0) == sid:
+            it["name"] = new
+            found = True
+            break
+    if not found:
+        return JSONResponse({"ok": False, "error": "id nicht gefunden"}, status_code=404)
+
     _save_sortimente(items)
     return {"ok": True, "items": _load_sortimente()}
 
@@ -1477,10 +1607,15 @@ def admin_sortimente_delete(request: Request, data: Dict[str, Any]):
     guard = _admin_guard(request)
     if guard:
         return guard
-    name = str(data.get("name", "") or "").strip()
-    if not name:
-        return JSONResponse({"ok": False, "error": "name fehlt"}, status_code=400)
-    items = [x for x in _load_sortimente() if x != name]
+    sid_raw = str(data.get("id", "") or data.get("sortiment_id","") or "").strip()
+    if not sid_raw:
+        return JSONResponse({"ok": False, "error": "id fehlt"}, status_code=400)
+    try:
+        sid = int(sid_raw)
+    except Exception:
+        return JSONResponse({"ok": False, "error": "id ungültig"}, status_code=400)
+
+    items = [x for x in _load_sortimente() if int(x.get("id",0) or 0) != sid]
     _save_sortimente(items)
     return {"ok": True, "items": _load_sortimente()}
 
@@ -1523,7 +1658,8 @@ def admin_articles(request: Request, sortiment: str = "", only_failed: int = 0):
 
         nr = str(mj.get("artikelnr", p.stem))
         cat = (mj.get("kategorie", "") or "").strip()
-        sorti = (mj.get("sortiment", "") or "").strip()
+        sorti = (mj.get("sortiment_name", "") or mj.get("sortiment", "") or "").strip()
+        sorti_id = str(mj.get("sortiment_id", "") or "")
 
         if sortiment and sorti.lower() != sortiment.strip().lower():
             continue
@@ -1542,6 +1678,7 @@ def admin_articles(request: Request, sortiment: str = "", only_failed: int = 0):
             "beschreibung": mj.get("beschreibung", "") or "",
             "kategorie": cat,
             "sortiment": sorti,
+            "sortiment_id": sorti_id,
             "retail_price": mj.get("retail_price", 0.0) or 0.0,
             "rufpreis": mj.get("rufpreis", 0.0) or 0.0,
             "reviewed": bool(mj.get("reviewed", False)),

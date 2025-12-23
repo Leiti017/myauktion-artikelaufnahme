@@ -373,6 +373,7 @@ const btnDeleteArticle = document.getElementById('btn-delete-article');
         uebernehmen: 1,
         angeliefert: "",
         betriebsmittel: "",
+        sortiment_id: "",
         sortiment: "",
         price_system_enabled: true,
         hide_listprice: false
@@ -403,7 +404,7 @@ const btnDeleteArticle = document.getElementById('btn-delete-article');
     parts.push("ü: " + (s.uebernehmen ?? 1));
     if(s.angeliefert) parts.push("angel.: " + s.angeliefert);
     if(s.betriebsmittel) parts.push("BM: " + s.betriebsmittel);
-    if(s.sortiment) parts.push("Sort: " + s.sortiment);
+    if(s.sortiment_id) parts.push("Sort-ID: " + s.sortiment_id);
     parts.push((s.price_system_enabled===false) ? "Preis: AUS" : "Preis: AN");
     return parts.join(" · ");
   }
@@ -416,7 +417,7 @@ const btnDeleteArticle = document.getElementById('btn-delete-article');
     sUebernehmen.value = String(s.uebernehmen ?? 1);
     sAngeliefert.value = s.angeliefert || "";
     sBetriebsmittel.value = s.betriebsmittel || "";
-    if(sSortiment) sSortiment.value = s.sortiment || "";
+    if(sSortiment) sSortiment.value = (s.sortiment_id || s.sortiment || "");
     settingsMini.textContent = "Einstellungen: " + settingsText(s);
     // Main-Feld Menge übernehmen
     try{ fMenge.value = String(s.menge ?? 1); }catch(e){}
@@ -434,7 +435,8 @@ const btnDeleteArticle = document.getElementById('btn-delete-article');
       uebernehmen: parseInt(sUebernehmen.value||"1",10) || 1,
       angeliefert: (sAngeliefert.value||"").trim(),
       betriebsmittel: (sBetriebsmittel.value||"").trim(),
-      sortiment: (sSortiment ? (sSortiment.value||"").trim() : (prev.sortiment||"")),
+      sortiment_id: (sSortiment ? (sSortiment.value||"").trim() : (prev.sortiment_id||"")),
+      sortiment: (sSortiment && sSortiment.selectedOptions && sSortiment.selectedOptions[0] ? (sSortiment.selectedOptions[0].textContent||"").trim() : (prev.sortiment||"")),
       // preserve flags explicitly (falls prev unvollständig ist)
       price_system_enabled: (prev.price_system_enabled !== false),
       hide_listprice: (prev.hide_listprice === true)
@@ -852,6 +854,7 @@ btnSave.onclick = async ()=>{
           einlieferer_id: s.einlieferer_id,
           angeliefert: s.angeliefert,
           betriebsmittel: s.betriebsmittel,
+          sortiment_id: s.sortiment_id,
           sortiment: s.sortiment,
           einlieferer: s.einlieferer_id,
 
@@ -923,10 +926,11 @@ btnSave.onclick = async ()=>{
         const j = await res.json();
         const items = (j.items||[]);
         if(sSortiment){
-          const cur = (loadSettings().sortiment || "");
-          sSortiment.innerHTML = '<option value="">(kein Sortiment)</option>' + items.map(x=>{
-            const v = String(x).replaceAll('"','&quot;');
-            return `<option value="${v}">${v}</option>`;
+          const cur = (loadSettings().sortiment_id || "");
+          sSortiment.innerHTML = '<option value="">(kein Sortiment)</option>' + items.map(it=>{
+            const id = String(it.id ?? "").replaceAll('"','&quot;');
+            const name = String(it.name ?? "").replaceAll("<","&lt;").replaceAll('"','&quot;');
+            return `<option value="${id}">${name}</option>`;
           }).join('');
           if(cur) sSortiment.value = cur;
         }
