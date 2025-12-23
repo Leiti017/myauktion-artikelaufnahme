@@ -37,8 +37,7 @@
 
   <div id="locked" class="glass rounded-3xl p-6 shadow-xl hidden">
     <div class="text-lg font-bold mb-2">Admin geschützt</div>
-    <p class="text-sm opacity-90 mb-2">Bitte Admin-Token eingeben, damit Budget & Admin-Flags sichtbar sind.</p>
-    <div id="lock-error" class="text-xs hidden mb-2" style="color:#fecaca"></div>
+    <p class="text-sm opacity-90 mb-4">Bitte Admin-Token eingeben, damit Budget & Admin-Flags sichtbar sind.</p>
     <div class="grid md:grid-cols-3 gap-3 items-end">
       <div class="md:col-span-2">
         <label class="text-xs opacity-80">Admin-Token</label>
@@ -55,11 +54,10 @@
         <div>
           <div class="text-lg font-bold">CSV Export</div>
           <div class="text-xs opacity-80">Exportiere deine Artikel als Excel-kompatible CSV (mit Von/Bis Bereich).</div>
-<div class="text-xs opacity-80 mt-2">Neu: Restore/Import (für Drive/Updates).</div>
         </div>
         <div class="glass rounded-2xl p-3 mb-3">
   <div class="text-sm font-semibold mb-2">CSV Export</div>
-  <div class="grid grid-cols-1 sm:grid-cols-4 gap-2">
+  <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
     <div>
       <label class="block text-xs opacity-80 mb-1">Von ArtikelNr</label>
       <input id="export-from" class="input" type="number" placeholder="z.B. 123458">
@@ -68,26 +66,12 @@
       <label class="block text-xs opacity-80 mb-1">Bis ArtikelNr</label>
       <input id="export-to" class="input" type="number" placeholder="z.B. 123480">
     </div>
-    <div>
-      <label class="block text-xs opacity-80 mb-1">Sortiment-ID</label>
-      <input id="export-sortiment" class="input" type="number" placeholder="z.B. 2349">
-    </div>
     <div class="flex items-end gap-2">
       <button id="btn-export-range" class="btn btn-primary w-full sm:w-auto" type="button">CSV exportieren</button>
       <button id="btn-export-images" class="btn btn-primary w-full sm:w-auto" type="button">Bilder ZIP</button>
     </div>
   </div>
   <div class="text-[11px] opacity-70 mt-2">Leer lassen = kompletter Export.</div>
-  <div class="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2">
-    <button id="btn-restore-now" class="btn btn-primary w-full sm:w-auto" type="button">Restore jetzt (Drive)</button>
-    <label class="btn btn-primary w-full sm:w-auto" style="justify-content:center;cursor:pointer;">
-      CSV importieren
-      <input id="import-file" type="file" accept=".csv,text/csv" style="display:none">
-    </label>
-    <button id="btn-import-run" class="btn btn-primary w-full sm:w-auto" type="button">Import starten</button>
-  </div>
-  <div id="import-status" class="text-[11px] opacity-80 mt-2"></div>
-
 </div>
       </div>
     </section>
@@ -100,7 +84,7 @@
           <div class="text-xs opacity-80">Anlegen / umbennen / löschen – bleibt gespeichert und ist in den Einstellungen auswählbar.</div>
         </div>
         <div class="flex gap-2 w-full md:w-auto">
-          <div class="grid grid-cols-1 md:grid-cols-3 gap-2 w-full md:w-auto"><input id="sort-add" class="input" placeholder="Name z.B. (22) Drogerie/Kosmetik 85"><input id="sort-add-id" class="input" placeholder="ID z.B. 2349 (leer = auto)"></div>
+          <input id="sort-add" class="input" placeholder="z.B. (22) Tiernahrung 45">
           <button id="btn-sort-add" class="btn btn-primary" type="button">Hinzufügen</button>
         </div>
       </div>
@@ -234,7 +218,7 @@ function getToken(){
   try{
     const qs = new URLSearchParams(location.search);
     const t = qs.get("t");
-    if(t){
+    if(t && t.length > 10){
       localStorage.setItem("MYAUKTION_ADMIN_TOKEN", t);
       return t;
     }
@@ -306,9 +290,9 @@ function setToken(t){
       const items = (js.items||[]);
       if(fSort){
         const cur = (fSort.value || "").trim();
-        fSort.innerHTML = '<option value="">Alle</option>' + items.map(it=>{
-          const name = String(it.name ?? "").replaceAll('"','&quot;');
-          return `<option value="${name}">${name}</option>`;
+        fSort.innerHTML = '<option value="">Alle</option>' + items.map(x=>{
+          const v = String(x).replaceAll('"','&quot;');
+          return `<option value="${v}">${v}</option>`;
         }).join('');
         if(cur) fSort.value = cur;
       }
@@ -320,18 +304,14 @@ function setToken(t){
   function renderSortimente(items){
     const box = document.getElementById('sort-list');
     if(!box) return;
-    box.innerHTML = (items||[]).map(it=>{
-      const id = String(it.id ?? "").replaceAll("<","&lt;").replaceAll('"','&quot;');
-      const name = String(it.name ?? "").replaceAll("<","&lt;");
+    box.innerHTML = (items||[]).map(n=>{
+      const safe = String(n).replaceAll("<","&lt;");
       return `
         <div class="flex items-center justify-between gap-2 py-1 border-b border-white/10">
-          <div class="text-sm">
-            <div class="font-semibold">${name}</div>
-            <div class="text-xs opacity-80">ID: ${id}</div>
-          </div>
+          <div class="text-sm">${safe}</div>
           <div class="flex gap-2">
-            <button class="btn btn-primary" style="padding:.25rem .7rem;font-size:.75rem" onclick="renameSortiment('${id}')">Umbenennen</button>
-            <button class="btn btn-primary" style="padding:.25rem .7rem;font-size:.75rem" onclick="deleteSortiment('${id}')">Löschen</button>
+            <button class="btn btn-primary" style="padding:.25rem .7rem;font-size:.75rem" onclick="renameSortiment('${safe.replaceAll("'","&#39;")}')">Umbennen</button>
+            <button class="btn btn-primary" style="padding:.25rem .7rem;font-size:.75rem" onclick="deleteSortiment('${safe.replaceAll("'","&#39;")}')">Löschen</button>
           </div>
         </div>
       `;
@@ -340,34 +320,25 @@ function setToken(t){
 
   async function addSortiment(){
     const inp = document.getElementById('sort-add');
-    const inpId = document.getElementById('sort-add-id');
     const name = (inp?.value || "").trim();
-    const id = (inpId?.value || "").trim();
     if(!name) return;
-    await apiPost("/api/admin/sortimente/add", {name, id});
+    await apiPost("/api/admin/sortimente/add", {name});
     inp.value = "";
-    if(inpId) inpId.value = "";
     await loadSortimente();
     await refresh();
   }
 
-  async function renameSortiment(id){
-    const js = await api("/api/admin/sortimente");
-    const items = (js.items||[]);
-    const cur = items.find(x => String(x.id) === String(id));
-    const oldName = cur ? String(cur.name||"") : "";
+  async function renameSortiment(oldName){
     const nn = prompt("Neuer Name für Sortiment:", oldName);
     if(!nn) return;
-    await apiPost("/api/admin/sortimente/rename", {id, new: nn});
+    await apiPost("/api/admin/sortimente/rename", {old: oldName, new: nn});
     await loadSortimente();
     await refresh();
   }
 
-  async function deleteSortiment(id){
-    if(!confirm("Sortiment wirklich löschen?
-
-ID: " + id)) return;
-    await apiPost("/api/admin/sortimente/delete", {id});
+  async function deleteSortiment(name){
+    if(!confirm("Sortiment wirklich löschen?\n\n" + name)) return;
+    await apiPost("/api/admin/sortimente/delete", {name});
     await loadSortimente();
     await refresh();
   }
@@ -402,17 +373,6 @@ ID: " + id)) return;
   async function init(){
     const t = getToken();
     if(!t){
-      // Wenn Server kein ADMIN_TOKEN gesetzt hat, ist Admin offen -> ping testen
-      try{
-        const r = await fetch('/api/admin/ping');
-        if(r.ok){
-          locked.classList.add('hidden');
-          content.classList.remove('hidden');
-          await loadSortimente();
-          await refresh();
-          return;
-        }
-      }catch(e){}
       locked.classList.remove("hidden");
       content.classList.add("hidden");
       return;
@@ -434,16 +394,6 @@ ID: " + id)) return;
       await loadSortimente();
       await refresh();
     }catch(e){
-      // Token falsch oder Server nicht erreichbar
-      try{
-        const box = document.getElementById('lock-error');
-        if(box){
-          box.textContent = (String(e||'') === 'Error: unauthorized') ? 'Token falsch – bitte erneut eingeben.' : ('Fehler: ' + String(e));
-          box.classList.remove('hidden');
-        }
-      }catch(_){}
-      // falschen Token nicht „festklemmen“
-      try{ localStorage.removeItem('MYAUKTION_ADMIN_TOKEN'); }catch(_){ }
       locked.classList.remove("hidden");
       content.classList.add("hidden");
     }
@@ -454,8 +404,6 @@ ID: " + id)) return;
   if(btnSortAdd){ btnSortAdd.onclick = addSortiment; }
 
   btnUnlock.onclick = async ()=>{
-    try{ const box=document.getElementById('lock-error'); if(box){ box.classList.add('hidden'); box.textContent=''; } }catch(_){}
-
     const t = (tokenInp.value || "").trim();
     if(!t) return;
     setToken(t);
@@ -465,40 +413,26 @@ ID: " + id)) return;
   if(btnBudgetUnlock){
     btnBudgetUnlock.onclick = async ()=>{
       const entered = (budgetTokenInp?.value || "").trim();
-      let t = (getToken() || "").trim();
+      const t = (getToken() || "").trim();
 
+      // Simple UI-Schutz: Budget nur anzeigen, wenn Passwort nochmals eingegeben wurde
       if(!entered) return;
-
-      // Wenn noch kein Admin-Token gespeichert ist (User hängt im Lock-Screen),
-      // nehmen wir das eingegebene Passwort als Admin-Token und versuchen damit zu entsperren.
-      if(!t){
-        setToken(entered);
-        t = entered;
-      }
-
-      // Wenn Token existiert, muss es übereinstimmen.
       if(t && entered !== t){
-        alert("Falsches Passwort.");
+        alert("Falsches Budget-Passwort.");
         return;
       }
 
-      // Budget freischalten
       sessionStorage.setItem("MYAUKTION_BUDGET_UNLOCKED", "1");
       budgetUnlocked = true;
       budgetLocked.classList.add("hidden");
       budgetContent.classList.remove("hidden");
-
-      // WICHTIG: Budget-Button soll auch Admin entsperren (Content anzeigen)
-      try{
-        locked.classList.add("hidden");
-        content.classList.remove("hidden");
-      }catch(e){}
-
       await loadSortimente();
       await refresh();
     };
   }
-fSort.onchange = refresh;
+
+
+  fSort.onchange = refresh;
   fFailed.onchange = refresh;
   fQ.oninput = ()=> refresh();
 
@@ -506,7 +440,6 @@ fSort.onchange = refresh;
   const btnExportRange = document.getElementById('btn-export-range');
   const exFrom = document.getElementById('export-from');
   const exTo = document.getElementById('export-to');
-  const exSort = document.getElementById('export-sortiment');
 
   if(btnExportRange){
     btnExportRange.addEventListener('click', ()=>{
@@ -515,8 +448,6 @@ fSort.onchange = refresh;
       const params = new URLSearchParams();
       if(a) params.set('from_nr', a);
       if(b) params.set('to_nr', b);
-      const s = exSort ? String(exSort.value||'').trim() : '';
-      if(s) params.set('sortiment_id', s);
 
       // Admin Token als Query mitschicken (Server prüft token=...)
       const t = getToken ? String(getToken()||'').trim() : '';
@@ -539,8 +470,6 @@ if(btnExportImages){
     const params = new URLSearchParams();
     if(a) params.set('from_nr', a);
     if(b) params.set('to_nr', b);
-    const s = exSort ? String(exSort.value||'').trim() : '';
-    if(s) params.set('sortiment_id', s);
 
     // Admin Token als Query mitschicken (Server prüft token=...)
     const t = getToken ? String(getToken()||'').trim() : '';
@@ -550,70 +479,7 @@ if(btnExportImages){
     window.location.href = url;
   });
 }
-
-  // Restore/Import
-  const btnRestoreNow = document.getElementById('btn-restore-now');
-  const importFile = document.getElementById('import-file');
-  const btnImportRun = document.getElementById('btn-import-run');
-  const importStatus = document.getElementById('import-status');
-  let _importPicked = null;
-
-  if(importFile){
-    importFile.addEventListener('change', ()=>{
-      _importPicked = (importFile.files && importFile.files[0]) ? importFile.files[0] : null;
-      if(importStatus) importStatus.textContent = _importPicked ? ("Ausgewählt: " + _importPicked.name) : "";
-    });
-  }
-
-  if(btnRestoreNow){
-    btnRestoreNow.addEventListener('click', async ()=>{
-      try{
-        if(importStatus) importStatus.textContent = "Restore läuft …";
-        const t = getToken();
-        const res = await fetch('/api/admin/restore_now', { method:'POST', headers: { ...(t ? {'X-Admin-Token': t} : {}) } });
-        const j = await res.json();
-        if(!res.ok || !j.ok){
-          if(importStatus) importStatus.textContent = "Restore Fehler: " + (j.error || res.status);
-          return;
-        }
-        if(importStatus) importStatus.textContent = "Restore OK: " + (j.status || "ok");
-        await loadSortimente();
-        await refresh();
-      }catch(e){
-        if(importStatus) importStatus.textContent = "Restore Fehler: " + String(e);
-      }
-    });
-  }
-
-  if(btnImportRun){
-    btnImportRun.addEventListener('click', async ()=>{
-      try{
-        if(!_importPicked){
-          alert("Bitte zuerst eine CSV auswählen.");
-          return;
-        }
-        if(importStatus) importStatus.textContent = "Import läuft …";
-        const t = getToken();
-        const fd = new FormData();
-        fd.append('file', _importPicked);
-        fd.append('overwrite', '0');
-        const res = await fetch('/api/admin/import_csv', { method:'POST', headers: { ...(t ? {'X-Admin-Token': t} : {}) }, body: fd });
-        const j = await res.json();
-        if(!res.ok || !j.ok){
-          if(importStatus) importStatus.textContent = "Import Fehler: " + (j.error || res.status);
-          return;
-        }
-        if(importStatus) importStatus.textContent = `Import OK: created=${j.created}, updated=${j.updated}, skipped=${j.skipped}`;
-        await loadSortimente();
-        await refresh();
-      }catch(e){
-        if(importStatus) importStatus.textContent = "Import Fehler: " + String(e);
-      }
-    });
-  }
-
   init();
-
 </script>
 </body>
 </html>

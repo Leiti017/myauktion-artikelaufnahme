@@ -316,7 +316,7 @@ def _update_csv_row_for_art(artikelnr: str, meta: Dict[str, Any]) -> None:
     lagerort = str(meta.get("lagerort") or "")
     lagerstand = int(meta.get("lagerstand") or 1)
     uebernehmen = int(meta.get("uebernehmen") or 1)
-    sortiment = str(meta.get("sortiment_id") or "")
+    sortiment = str(meta.get("sortiment") or "")
     einl_id = str(meta.get("einlieferer_id") or meta.get("einlieferer") or "")
     angel = str(meta.get("angeliefert") or "")
     betr = str(meta.get("betriebsmittel") or "")
@@ -548,22 +548,10 @@ def _gdrive_backup_article(artikelnr: str) -> None:
         # Upload/Update daily CSV
         day = time.strftime("%Y-%m-%d")
         daily_name = f"artikel_export_{day}.csv"
-        latest_name = "artikel_export_latest.csv"
         # ensure current CSV exists
         _ensure_export_csv_exists()
         csv_bytes = EXPORT_CSV.read_bytes()
         _gdrive_upload_bytes(token, folder_id, daily_name, csv_bytes, "text/csv")
-        # always keep an easy-to-find latest snapshot
-        _gdrive_upload_bytes(token, folder_id, latest_name, csv_bytes, "text/csv")
-
-        # Upload meta JSON for article
-        try:
-            meta_name = f"{artikelnr}.json"
-            meta_bytes = _meta_path(artikelnr).read_bytes() if _meta_path(artikelnr).exists() else b""
-            if meta_bytes:
-                _gdrive_upload_bytes(token, folder_id, meta_name, meta_bytes, "application/json")
-        except Exception:
-            pass
 
         # Upload images for article (processed preferred, else raw)
         pics = _list_image_paths(artikelnr, PROCESSED_DIR)
@@ -576,217 +564,6 @@ def _gdrive_backup_article(artikelnr: str) -> None:
         # Backup darf nie das Speichern blockieren
         return
 
-
-# ----------------------------
-# Google Drive Restore (bei Render-ReDeploy / ohne Persistent Disk)
-# - Lädt *.json und *.jpg aus dem Backup-Ordner zurück in uploads/raw
-# - Danach wird CSV neu gebaut
-# - Läuft im Background-Thread (damit Startup schnell bleibt)
-# ----------------------------
-RESTORE_MARKER = EXPORT_DIR / "restore_done.marker"
-
-def _gdrive_list_files_in_folder(token: str, folder_id: str):
-    files = []
-    page_token = None
-    while True:
-        params = {"q": f"'{folder_id}' in parents and trashed=false",
-                  "fields": "nextPageToken,files(id,name,modifiedTime)",
-                  "pageSize": 1000}
-        if page_token:
-            params["pageToken"] = page_token
-        r = requests.get("https://www.googleapis.com/drive/v3/files", headers=_gdrive_headers(token), params=params, timeout=60)
-        r.raise_for_status()
-        js = r.json()
-        files.extend(js.get("files", []))
-        page_token = js.get("nextPageToken")
-        if not page_token:
-            break
-    return files
-
-def _gdrive_download_file(token: str, file_id: str) -> bytes:
-    r = requests.get(f"https://www.googleapis.com/drive/v3/files/{file_id}", headers=_gdrive_headers(token), params={"alt":"media"}, timeout=120)
-    r.raise_for_status()
-    return r.content
-
-
-def _restore_jsons_from_csv(csv_bytes: bytes) -> int:
-    """Fallback: wenn im Drive keine *.json existieren, rekonstruieren wir minimale Meta-JSONs aus CSV.
-    Damit bleiben alte Artikel sichtbar und editierbar.
-    """
-    try:
-        RAW_DIR.mkdir(parents=True, exist_ok=True)
-        txt = csv_bytes.decode("utf-8-sig", errors="ignore")
-        f = io.StringIO(txt)
-        reader = csv.DictReader(f, delimiter=";")
-        restored = 0
-        now = int(time.time())
-        for row in reader:
-            nr = str(row.get("ArtikelNr","") or row.get("artikelnr","") or "").strip()
-            if not nr.isdigit():
-                continue
-            meta_path = RAW_DIR / f"{nr}.json"
-            if meta_path.exists():
-                continue
-            # Map common columns
-            titel = str(row.get("Bezeichnung","") or row.get("Titel","") or "").strip()
-            lagerort = str(row.get("Lagerort","") or "").strip()
-            mitarbeiter = str(row.get("Mitarbeiter","") or "").strip()
-            sortiment_id = str(row.get("Sortiment","") or "").strip()
-            # prices may be "12,34" -> float
-            def _p(x):
-                s = str(x or "").strip().replace("€","").replace(" ","")
-                s = s.replace(".","").replace(",",".") if "," in s else s
-                try: return float(s)
-                except Exception: return 0.0
-            rufpreis = _p(row.get("Rufpreis",""))
-            retail = _p(row.get("Listenpreis",""))
-            menge = row.get("Menge","")
-            try:
-                menge = int(str(menge).strip() or "1")
-            except Exception:
-                menge = 1
-
-            meta = {
-                "artikelnr": nr,
-                "titel": titel,
-                "beschreibung": "",
-                "kategorie": "",
-                "lagerort": lagerort,
-                "einlieferer": "",
-                "mitarbeiter": mitarbeiter,
-                "menge": menge,
-                "rufpreis": rufpreis,
-                "retail_price": retail,
-                "sortiment_id": sortiment_id,
-                "sortiment_name": "",
-                "sortiment": "",
-                "created_at": now,
-                "updated_at": now,
-                "reviewed": False,
-                "ki_source": "imported",
-                "ki_last_error": ""
-            }
-            meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), "utf-8")
-            restored += 1
-        return restored
-    except Exception:
-        return 0
-
-def _gdrive_restore_all() -> None:
-    if not _gdrive_enabled():
-        return
-    # only once per deploy/container
-    try:
-        if RESTORE_MARKER.exists():
-            return
-    except Exception:
-        pass
-
-    try:
-        token = _gdrive_access_token()
-        folder_id = _gdrive_get_folder_id(token)
-
-        # If we already have data (e.g. dev/local), skip restore
-        try:
-            has_any = any(RAW_DIR.glob("*.json")) or any(RAW_DIR.glob("*.jpg"))
-            if has_any:
-                RESTORE_MARKER.write_text("skip_existing", "utf-8")
-                return
-        except Exception:
-            pass
-
-        files = _gdrive_list_files_in_folder(token, folder_id)
-
-        # pick a CSV snapshot (latest)
-        csv_file = None
-        for f in files:
-            if str(f.get('name','')).strip() == 'artikel_export_latest.csv':
-                csv_file = f
-                break
-        if not csv_file:
-            # fallback: newest artikel_export_*.csv
-            cands = [f for f in files if str(f.get('name','')).startswith('artikel_export_') and str(f.get('name','')).lower().endswith('.csv')]
-            # Drive returns modifiedTime; sort desc
-            cands.sort(key=lambda x: str(x.get('modifiedTime','')), reverse=True)
-            if cands:
-                csv_file = cands[0]
-
-        # restore JSON first (so meta exists even before images)
-        json_files = [f for f in files if str(f.get("name","")).lower().endswith(".json")]
-        jpg_files  = [f for f in files if str(f.get("name","")).lower().endswith(".jpg")]
-
-        RAW_DIR.mkdir(parents=True, exist_ok=True)
-
-        restored = 0
-        json_restored = 0
-        for f in json_files:
-            name = str(f.get("name","") or "")
-            fid = str(f.get("id","") or "")
-            if not name or not fid:
-                continue
-            # Only accept pure article meta names like 123456.json
-            if not re.match(r"^\d+\.json$", name):
-                continue
-            try:
-                data = _gdrive_download_file(token, fid)
-                (RAW_DIR / name).write_bytes(data)
-                restored += 1
-                json_restored += 1
-            except Exception:
-                pass
-
-        # Fallback: wenn keine JSONs im Drive liegen, rekonstruiere Meta aus CSV
-        if json_restored == 0 and csv_file and csv_file.get('id'):
-            try:
-                csv_bytes = _gdrive_download_file(token, str(csv_file.get('id')))
-                restored += _restore_jsons_from_csv(csv_bytes)
-            except Exception:
-                pass
-
-        # restore images
-        for f in jpg_files:
-            name = str(f.get("name","") or "")
-            fid = str(f.get("id","") or "")
-            if not name or not fid:
-                continue
-            # Only accept article image scheme
-            if not re.match(r"^\d+(?:_\d+)?\.jpg$", name, flags=re.I):
-                continue
-            try:
-                data = _gdrive_download_file(token, fid)
-                (RAW_DIR / name).write_bytes(data)
-                restored += 1
-                json_restored += 1
-            except Exception:
-                pass
-
-        # Rebuild CSV from restored JSONs
-        try:
-            _rebuild_csv_export()
-        except Exception:
-            pass
-
-        try:
-            RESTORE_MARKER.write_text(f"restored:{restored}", "utf-8")
-        except Exception:
-            pass
-
-        print(f"[GDRIVE] Restore done. Files restored: {restored}")
-    except Exception as e:
-        try:
-            RESTORE_MARKER.write_text("failed:" + str(e)[:200], "utf-8")
-        except Exception:
-            pass
-        print("[GDRIVE] Restore failed:", e)
-
-def _start_restore_thread():
-    try:
-        if not _gdrive_enabled():
-            return
-        th = threading.Thread(target=_gdrive_restore_all, daemon=True)
-        th.start()
-    except Exception:
-        return
 # ----------------------------
 # Admin Auth
 # ----------------------------
@@ -821,8 +598,6 @@ def _default_meta(artikelnr: str) -> Dict[str, Any]:
         "mitarbeiter": "",
         "lagerstand": 1,
         "sortiment": "",
-        "sortiment_id": "",
-        "sortiment_name": "",
         "reviewed": False,
         "ki_source": "",          # pending | realtime | failed | ""
         "ki_last_error": "",
@@ -927,7 +702,7 @@ def _rebuild_csv_export() -> None:
             "Lagerort": str(d.get("lagerort", "") or ""),
             "Lagerstand": int(d.get("lagerstand", 1) or 1),
             "Uebernehmen": int(d.get("uebernehmen", 1) or 1),
-            "Sortiment": str(d.get("sortiment_id", "") or ""),
+            "Sortiment": str(d.get("sortiment", "") or ""),
             "Einlieferer-ID": str(d.get("einlieferer_id", d.get("einlieferer", "")) or ""),
             "Angeliefert": str(d.get("angeliefert", "") or ""),
             "Betriebsmittel": str(d.get("betriebsmittel", "") or ""),
@@ -1041,117 +816,32 @@ def _run_meta_background(artikelnr: str, img_path: Path) -> None:
 
 # ----------------------------
 # Sortimente (persistent, Admin verwaltbar)
-# - Ab jetzt: jedes Sortiment hat ID + Name.
-# - JSON Format (export/sortimente.json):
-#     [{"id":2349,"name":"(22) Drogerie/Kosmetik 85"}, ...]
-# - Backward compatible: falls altes Format ["(22) ...", ...] -> wird beim Laden in IDs umgewandelt.
 # ----------------------------
 SORTIMENTE_JSON = EXPORT_DIR / "sortimente.json"
 
-def _default_sortimente() -> list[dict]:
-    return [{"id": 2349, "name": "(22) Tiernahrung 45"}]
+def _default_sortimente() -> list[str]:
+    # Beispiele (kannst du im Admin ändern)
+    return ["(22) Tiernahrung 45"]
 
-def _next_sortiment_id(items: list[dict]) -> int:
-    mx = 0
-    for it in (items or []):
-        try:
-            mx = max(mx, int(it.get("id", 0) or 0))
-        except Exception:
-            pass
-    return mx + 1 if mx else 1000
-
-def _normalize_sortimente(data) -> list[dict]:
-    out: list[dict] = []
-    if not isinstance(data, list):
-        return out
-
-    # old format: list[str]
-    if data and all(isinstance(x, str) for x in data):
-        nid = 1000
-        for s in data:
-            name = str(s).strip()
-            if not name:
-                continue
-            out.append({"id": nid, "name": name})
-            nid += 1
-        return out
-
-    # new format: list[dict]
-    for x in data:
-        if not isinstance(x, dict):
-            continue
-        try:
-            sid = int(x.get("id", 0) or 0)
-        except Exception:
-            sid = 0
-        name = str(x.get("name", "") or "").strip()
-        if not sid or not name:
-            continue
-        out.append({"id": sid, "name": name})
-
-    # de-dupe by id (first wins)
-    seen = set()
-    dedup = []
-    for it in out:
-        if it["id"] in seen:
-            continue
-        seen.add(it["id"])
-        dedup.append(it)
-    return dedup
-
-def _load_sortimente() -> list[dict]:
+def _load_sortimente() -> list[str]:
     if SORTIMENTE_JSON.exists():
         try:
             data = json.loads(SORTIMENTE_JSON.read_text("utf-8"))
-            items = _normalize_sortimente(data)
-            if items:
-                # persist legacy -> new format
-                if data and all(isinstance(x, str) for x in data):
-                    _save_sortimente(items)
-                return items
+            if isinstance(data, list):
+                return [str(x).strip() for x in data if str(x).strip()]
         except Exception:
             pass
-    items = _default_sortimente()
-    try:
-        if not SORTIMENTE_JSON.exists():
-            _save_sortimente(items)
-    except Exception:
-        pass
-    return items
+    return _default_sortimente()
 
-def _save_sortimente(items: list[dict]) -> None:
+def _save_sortimente(items: list[str]) -> None:
     cleaned = []
-    seen_ids = set()
-    for x in (items or []):
-        if not isinstance(x, dict):
+    for x in items:
+        s = str(x).strip()
+        if not s:
             continue
-        try:
-            sid = int(x.get("id", 0) or 0)
-        except Exception:
-            continue
-        name = str(x.get("name", "") or "").strip()
-        if not sid or not name:
-            continue
-        if sid in seen_ids:
-            continue
-        seen_ids.add(sid)
-        cleaned.append({"id": sid, "name": name})
+        if s not in cleaned:
+            cleaned.append(s)
     SORTIMENTE_JSON.write_text(json.dumps(cleaned, ensure_ascii=False, indent=2), "utf-8")
-
-def _sortiment_name_by_id(sortiment_id: str | int) -> str:
-    try:
-        sid = int(str(sortiment_id).strip() or 0)
-    except Exception:
-        sid = 0
-    if not sid:
-        return ""
-    for it in _load_sortimente():
-        try:
-            if int(it.get("id", 0) or 0) == sid:
-                return str(it.get("name", "") or "").strip()
-        except Exception:
-            continue
-    return ""
 
 
 # ----------------------------
@@ -1178,8 +868,7 @@ def _list_articles() -> list[dict]:
             "artikelnr": nr,
             "titel": mj.get("titel", "") or "",
             "beschreibung": mj.get("beschreibung", "") or "",
-            "sortiment": (mj.get("sortiment_name", "") or mj.get("sortiment", "") or "").strip(),
-            "sortiment_id": str(mj.get("sortiment_id", "") or ""),
+            "sortiment": (mj.get("sortiment", "") or "").strip(),
             "lagerort": mj.get("lagerort", "") or "",
             "menge": int(mj.get("menge", 1) or 1),
             "rufpreis": mj.get("rufpreis", 0.0) or 0.0,
@@ -1193,12 +882,6 @@ def _list_articles() -> list[dict]:
     # neueste zuerst
     items.sort(key=lambda x: int(x.get("created_at", 0) or 0), reverse=True)
     return items
-
-
-@app.on_event("startup")
-def _on_startup():
-    # Restore alte Artikel aus Google Drive, falls Render Container neu gestartet wurde
-    _start_restore_thread()
 
 # ----------------------------
 # Routes
@@ -1257,52 +940,19 @@ def articles_api(date_from: str | None = None, date_to: str | None = None):
 
     return {"ok": True, "items": items}
 
-@app.get("/api/recent_articles")
-def recent_articles(mitarbeiter: str = "", limit: int = 20):
-    """Letzte aufgenommene Artikel (neueste zuerst).
-    Optional Filter:
-      /api/recent_articles?mitarbeiter=Jan&limit=20
-    """
-    items = _list_articles()  # already newest first
-    m = (mitarbeiter or "").strip().lower()
-    if m:
-        items = [x for x in items if str(x.get("mitarbeiter","") or "").strip().lower() == m]
-
-    try:
-        lim = int(limit or 20)
-    except Exception:
-        lim = 20
-    lim = max(1, min(lim, 100))
-    items = items[:lim]
-
-    # keep payload small
-    out = []
-    for it in items:
-        out.append({
-            "artikelnr": it.get("artikelnr",""),
-            "titel": it.get("titel",""),
-            "created_at": int(it.get("created_at",0) or 0),
-            "sortiment": it.get("sortiment",""),
-            "sortiment_id": it.get("sortiment_id",""),
-            "lagerort": it.get("lagerort",""),
-            "rufpreis": it.get("rufpreis",0),
-        })
-    return {"ok": True, "items": out}
-
 
 @app.get("/api/export.csv")
-def export_csv(from_nr: str | None = None, to_nr: str | None = None, sortiment_id: str | None = None):
+def export_csv(from_nr: str | None = None, to_nr: str | None = None):
     """
-    Export CSV (UTF-8 mit BOM für Excel). Optional:
-      - Bereich: from_nr/to_nr
-      - Filter: sortiment_id
+    Export CSV (UTF-8 mit BOM für Excel). Optionaler Bereich:
       /api/export.csv?from_nr=123458&to_nr=123480
     """
     _ensure_export_csv_exists()
 
-    # Kein Filter -> Datei direkt ausliefern (nur wenn wirklich kein Filter aktiv)
-    if not from_nr and not to_nr and not sortiment_id:
+    # Kein Filter -> Datei direkt ausliefern
+    if not from_nr and not to_nr:
         return FileResponse(str(EXPORT_CSV), filename="artikel_export.csv", media_type="text/csv")
+
     # Filter -> in-memory CSV erzeugen
     def _in_range(n: str) -> bool:
         try:
@@ -1328,9 +978,6 @@ def export_csv(from_nr: str | None = None, to_nr: str | None = None, sortiment_i
         if not _in_range(art):
             continue
         meta = _load_meta_json(art)
-        if sortiment_id:
-            if str(meta.get('sortiment_id','') or '').strip() != str(sortiment_id).strip():
-                continue
         rows.append([
             art,
             str(int(meta.get("menge") or 1)),
@@ -1395,7 +1042,7 @@ def _in_range_art(n: str, from_nr: str | None, to_nr: str | None) -> bool:
 @app.get("/api/images.zip")
 @app.get("/api/export_images.zip")
 @app.get("/api/bilder.zip")
-def export_images_zip(request: Request, from_nr: str | None = None, to_nr: str | None = None, sortiment_id: str | None = None):
+def export_images_zip(request: Request, from_nr: str | None = None, to_nr: str | None = None):
     """ZIP mit allen Bildern (RAW) für Artikel (optional Von/Bis ArtikelNr).
     Admin-Token geschützt (X-Admin-Token oder ?token=...).
     """
@@ -1410,13 +1057,6 @@ def export_images_zip(request: Request, from_nr: str | None = None, to_nr: str |
             art = jf.stem
             if (from_nr or to_nr) and not _in_range_art(art, from_nr, to_nr):
                 continue
-            if sortiment_id:
-                try:
-                    meta = _load_meta_json(art)
-                    if str(meta.get('sortiment_id','') or '').strip() != str(sortiment_id).strip():
-                        continue
-                except Exception:
-                    pass
             for p in _images_for_art(art):
                 try:
                     # in zip nur Dateiname, weil schon eindeutig (ART...jpg)
@@ -1694,23 +1334,9 @@ def save(data: Dict[str, Any]):
     mj = _load_meta_json(artikelnr)
 
     # Textfelder
-    for k in ["titel", "beschreibung", "lagerort", "einlieferer", "mitarbeiter", "kategorie"]:
+    for k in ["titel", "beschreibung", "lagerort", "einlieferer", "mitarbeiter", "kategorie", "sortiment"]:
         if k in data and data[k] is not None:
             mj[k] = str(data[k])
-    # Sortiment: prefer sortiment_id (numeric). Name wird aus ID abgeleitet.
-    # Backward compatible: falls noch 'sortiment' Name kommt, speichern wir es als sortiment_name und versuchen ID zu finden.
-    if "sortiment_id" in data and data.get("sortiment_id") is not None:
-        sid = str(data.get("sortiment_id") or "").strip()
-        mj["sortiment_id"] = sid
-        mj["sortiment_name"] = _sortiment_name_by_id(sid)
-    elif "sortiment" in data and data.get("sortiment") is not None:
-        mj["sortiment_name"] = str(data.get("sortiment") or "").strip()
-        nm = mj["sortiment_name"]
-        for it in _load_sortimente():
-            if str(it.get("name","")).strip().lower() == nm.lower():
-                mj["sortiment_id"] = str(it.get("id"))
-                break
-
 
     # Settings-Felder (für CSV Export)
     if "menge" in data: mj["menge"] = int(data.get("menge") or 1)
@@ -1803,167 +1429,6 @@ def describe(artikelnr: str):
     return JSONResponse({"ok": False, "error": mj["ki_last_error"]}, status_code=502)
 
 
-
-# ----------------------------
-# Admin Ping (für UI Lock-Screen)
-# - Wenn ADMIN_TOKEN leer ist -> 200 ohne Token
-# - Wenn ADMIN_TOKEN gesetzt ist -> 401 ohne Token
-# ----------------------------
-@app.get("/api/admin/ping")
-def admin_ping(request: Request):
-    guard = _admin_guard(request)
-    if guard:
-        return guard
-    return {"ok": True}
-
-# ----------------------------
-# Admin: CSV Import (manuell) – falls Drive Scope Dateien nicht sieht
-# ----------------------------
-from fastapi import UploadFile as _UploadFile
-from fastapi import File as _File
-from fastapi import Form as _Form
-
-def _parse_price_any(s: str) -> float:
-    s = str(s or "").strip().replace("€","").replace(" ", "")
-    if not s:
-        return 0.0
-    if "," in s and "." in s:
-        s = s.replace(".","").replace(",",".")
-    elif "," in s:
-        s = s.replace(",",".")
-    try:
-        return float(s)
-    except Exception:
-        return 0.0
-
-@app.post("/api/admin/import_csv")
-async def admin_import_csv(request: Request, file: _UploadFile = _File(...), overwrite: int = _Form(0)):
-    guard = _admin_guard(request)
-    if guard:
-        return guard
-
-    data = await file.read()
-    txt = data.decode("utf-8-sig", errors="ignore")
-    import csv, io
-    rdr = csv.reader(io.StringIO(txt), delimiter=";")
-    rows = list(rdr)
-    if not rows:
-        return JSONResponse({"ok": False, "error": "CSV leer"}, status_code=400)
-
-    header = [c.strip() for c in rows[0]]
-
-    def idx(name):
-        try:
-            return header.index(name)
-        except Exception:
-            return -1
-
-    i_nr = idx("ArtikelNr")
-    if i_nr < 0:
-        for k in ("artikelnr","ARTIKELNR","Artikelnummer","Artikelnummern"):
-            if k in header:
-                i_nr = header.index(k); break
-    if i_nr < 0:
-        return JSONResponse({"ok": False, "error": "Header 'ArtikelNr' nicht gefunden"}, status_code=400)
-
-    i_title = idx("Bezeichnung")
-    i_desc  = idx("Beschreibung")
-    i_menge = idx("Menge")
-    i_preis = idx("Preis")
-    i_lp    = idx("Ladenpreis")
-    i_lager = idx("Lagerort")
-    i_ls    = idx("Lagerstand")
-    i_ueb   = idx("Uebernehmen")
-    i_sort  = idx("Sortiment")
-    i_einl  = idx("Einlieferer-ID")
-    i_ang   = idx("Angeliefert")
-    i_bm    = idx("Betriebsmittel")
-    i_ma    = idx("Mitarbeiter")
-
-    created = 0
-    skipped = 0
-    updated = 0
-    now = int(time.time())
-
-    for r in rows[1:]:
-        if not r or len(r) <= i_nr:
-            continue
-        nr = str(r[i_nr]).strip()
-        if not nr.isdigit():
-            continue
-
-        mp = _meta_path(nr)
-        exists = mp.exists()
-        if exists and not overwrite:
-            skipped += 1
-            continue
-
-        mj = _load_meta_json(nr) if exists else _default_meta(nr)
-
-        if i_title >= 0 and i_title < len(r): mj["titel"] = str(r[i_title]).strip()
-        if i_desc  >= 0 and i_desc  < len(r): mj["beschreibung"] = str(r[i_desc]).strip()
-        if i_lager >= 0 and i_lager < len(r): mj["lagerort"] = str(r[i_lager]).strip()
-        if i_ma    >= 0 and i_ma    < len(r): mj["mitarbeiter"] = str(r[i_ma]).strip()
-
-        if i_sort  >= 0 and i_sort  < len(r):
-            mj["sortiment_id"] = str(r[i_sort]).strip()
-            mj["sortiment_name"] = _sortiment_name_by_id(mj["sortiment_id"])
-
-        if i_einl >= 0 and i_einl < len(r):
-            mj["einlieferer_id"] = str(r[i_einl]).strip()
-            mj["einlieferer"] = mj["einlieferer_id"]
-
-        if i_ang >= 0 and i_ang < len(r): mj["angeliefert"] = str(r[i_ang]).strip()
-        if i_bm  >= 0 and i_bm  < len(r): mj["betriebsmittel"] = str(r[i_bm]).strip()
-
-        if i_menge >= 0 and i_menge < len(r):
-            try: mj["menge"] = int(str(r[i_menge]).strip() or "1")
-            except Exception: mj["menge"] = 1
-        if i_ls >= 0 and i_ls < len(r):
-            try: mj["lagerstand"] = int(str(r[i_ls]).strip() or "1")
-            except Exception: mj["lagerstand"] = 1
-        if i_ueb >= 0 and i_ueb < len(r):
-            try: mj["uebernehmen"] = int(str(r[i_ueb]).strip() or "1")
-            except Exception: mj["uebernehmen"] = 1
-
-        if i_preis >= 0 and i_preis < len(r):
-            mj["rufpreis"] = _parse_price_any(r[i_preis])
-        if i_lp >= 0 and i_lp < len(r):
-            mj["retail_price"] = _parse_price_any(r[i_lp])
-
-        if not exists:
-            mj["created_at"] = now
-            created += 1
-        else:
-            updated += 1
-
-        mj["ki_source"] = mj.get("ki_source") or "imported"
-        _save_meta_json(nr, mj)
-
-    _rebuild_csv_export()
-    return {"ok": True, "created": created, "updated": updated, "skipped": skipped, "overwrite": int(overwrite)}
-
-@app.post("/api/admin/restore_now")
-def admin_restore_now(request: Request):
-    guard = _admin_guard(request)
-    if guard:
-        return guard
-    try:
-        try:
-            if RESTORE_MARKER.exists():
-                RESTORE_MARKER.unlink()
-        except Exception:
-            pass
-        _gdrive_restore_all()
-        status = ""
-        try:
-            status = RESTORE_MARKER.read_text("utf-8") if RESTORE_MARKER.exists() else "no_marker"
-        except Exception:
-            status = "unknown"
-        return {"ok": True, "status": status}
-    except Exception as e:
-        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-
 # ----------------------------
 # Admin API (Token geschützt)
 # ----------------------------
@@ -1985,25 +1450,10 @@ def admin_sortimente_add(request: Request, data: Dict[str, Any]):
     name = str(data.get("name", "") or "").strip()
     if not name:
         return JSONResponse({"ok": False, "error": "name fehlt"}, status_code=400)
-
     items = _load_sortimente()
-    sid_raw = str(data.get("id", "") or "").strip()
-    if sid_raw:
-        try:
-            sid = int(sid_raw)
-        except Exception:
-            return JSONResponse({"ok": False, "error": "id ungültig"}, status_code=400)
-    else:
-        sid = _next_sortiment_id(items)
-
-    for it in items:
-        if int(it.get("id", 0) or 0) == sid:
-            return JSONResponse({"ok": False, "error": "id existiert bereits"}, status_code=400)
-        if str(it.get("name","")).strip().lower() == name.lower():
-            return JSONResponse({"ok": False, "error": "name existiert bereits"}, status_code=400)
-
-    items.append({"id": sid, "name": name})
-    _save_sortimente(items)
+    if name not in items:
+        items.append(name)
+        _save_sortimente(items)
     return {"ok": True, "items": _load_sortimente()}
 
 
@@ -2012,25 +1462,12 @@ def admin_sortimente_rename(request: Request, data: Dict[str, Any]):
     guard = _admin_guard(request)
     if guard:
         return guard
-    sid_raw = str(data.get("id", "") or "").strip()
+    old = str(data.get("old", "") or "").strip()
     new = str(data.get("new", "") or "").strip()
-    if not sid_raw or not new:
-        return JSONResponse({"ok": False, "error": "id/new fehlt"}, status_code=400)
-    try:
-        sid = int(sid_raw)
-    except Exception:
-        return JSONResponse({"ok": False, "error": "id ungültig"}, status_code=400)
-
+    if not old or not new:
+        return JSONResponse({"ok": False, "error": "old/new fehlt"}, status_code=400)
     items = _load_sortimente()
-    found = False
-    for it in items:
-        if int(it.get("id", 0) or 0) == sid:
-            it["name"] = new
-            found = True
-            break
-    if not found:
-        return JSONResponse({"ok": False, "error": "id nicht gefunden"}, status_code=404)
-
+    items = [new if x == old else x for x in items]
     _save_sortimente(items)
     return {"ok": True, "items": _load_sortimente()}
 
@@ -2040,15 +1477,10 @@ def admin_sortimente_delete(request: Request, data: Dict[str, Any]):
     guard = _admin_guard(request)
     if guard:
         return guard
-    sid_raw = str(data.get("id", "") or data.get("sortiment_id","") or "").strip()
-    if not sid_raw:
-        return JSONResponse({"ok": False, "error": "id fehlt"}, status_code=400)
-    try:
-        sid = int(sid_raw)
-    except Exception:
-        return JSONResponse({"ok": False, "error": "id ungültig"}, status_code=400)
-
-    items = [x for x in _load_sortimente() if int(x.get("id",0) or 0) != sid]
+    name = str(data.get("name", "") or "").strip()
+    if not name:
+        return JSONResponse({"ok": False, "error": "name fehlt"}, status_code=400)
+    items = [x for x in _load_sortimente() if x != name]
     _save_sortimente(items)
     return {"ok": True, "items": _load_sortimente()}
 
@@ -2091,8 +1523,7 @@ def admin_articles(request: Request, sortiment: str = "", only_failed: int = 0):
 
         nr = str(mj.get("artikelnr", p.stem))
         cat = (mj.get("kategorie", "") or "").strip()
-        sorti = (mj.get("sortiment_name", "") or mj.get("sortiment", "") or "").strip()
-        sorti_id = str(mj.get("sortiment_id", "") or "")
+        sorti = (mj.get("sortiment", "") or "").strip()
 
         if sortiment and sorti.lower() != sortiment.strip().lower():
             continue
@@ -2111,7 +1542,6 @@ def admin_articles(request: Request, sortiment: str = "", only_failed: int = 0):
             "beschreibung": mj.get("beschreibung", "") or "",
             "kategorie": cat,
             "sortiment": sorti,
-            "sortiment_id": sorti_id,
             "retail_price": mj.get("retail_price", 0.0) or 0.0,
             "rufpreis": mj.get("rufpreis", 0.0) or 0.0,
             "reviewed": bool(mj.get("reviewed", False)),
