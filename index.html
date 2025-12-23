@@ -274,6 +274,7 @@ const fArt = document.getElementById('f-artikelnr');
   const btnPhoto = document.getElementById('btn-photo');
   const btnDeletePhoto = document.getElementById('btn-delete-photo');
   const btnSave = document.getElementById('btn-save');
+
 const btnDeleteArticle = document.getElementById('btn-delete-article');
   const btnDescribe = document.getElementById('btn-describe');
   const btnPriceToggle = document.getElementById('btn-price-toggle');
@@ -340,7 +341,7 @@ const btnDeleteArticle = document.getElementById('btn-delete-article');
   });
 
 
-  const logEl = document.getElementById('log');
+  const recentEl = document.getElementById('recent');
   const toastWrap = document.getElementById('toast-wrap');
 
   let selectedImageUrl = "";
@@ -514,6 +515,55 @@ const btnDeleteArticle = document.getElementById('btn-delete-article');
     void el.offsetWidth;
     el.classList.add('show');
     setTimeout(()=>{ el.classList.remove('show'); setTimeout(()=>el.remove(),200); }, 1500);
+  }
+
+  // ---- Zuletzt aufgenommene Artikel (statt System-Log) ----
+  function _fmtDT(ts){
+    const n = Number(ts||0);
+    if(!n) return "";
+    const d = new Date(n*1000);
+    return d.toLocaleString();
+  }
+
+  function renderRecent(items){
+    if(!recentEl) return;
+    const arr = (items || []);
+    if(!arr.length){
+      recentEl.innerHTML = '<div class="text-xs opacity-70">Noch keine Artikel gefunden.</div>';
+      return;
+    }
+    recentEl.innerHTML = arr.map(it=>{
+      const nr = String(it.artikelnr||"");
+      const title = String(it.titel||"").replaceAll("<","&lt;");
+      const dt = _fmtDT(it.created_at);
+      const lo = String(it.lagerort||"").replaceAll("<","&lt;");
+      const rp = (it.rufpreis||0) ? String(Math.round(Number(it.rufpreis||0))) : "";
+      return `
+        <div class="flex items-center justify-between gap-2 py-1 border-b border-black/10">
+          <div class="min-w-0">
+            <div class="text-xs opacity-70">${dt}</div>
+            <div class="text-sm font-semibold truncate">${nr} · ${title}</div>
+            <div class="text-xs opacity-70 truncate">Lager: ${lo}${rp ? (" · Ruf: " + rp) : ""}</div>
+          </div>
+          <a class="text-xs font-bold underline shrink-0" href="/?edit=${nr}">Bearbeiten</a>
+        </div>
+      `;
+    }).join('');
+  }
+
+  async function loadRecent(){
+    try{
+      const s = loadSettings();
+      const m = (s.mitarbeiter || "").trim();
+      const qs = new URLSearchParams();
+      if(m) qs.set("mitarbeiter", m);
+      qs.set("limit", "25");
+      const res = await fetch("/api/recent_articles?" + qs.toString());
+      const j = await res.json();
+      renderRecent(j.items || []);
+    }catch(e){
+      if(recentEl) recentEl.innerHTML = '<div class="text-xs opacity-70">Konnte Liste nicht laden.</div>';
+    }
   }
   function validArtNr(){
     const v = (fArt.value||"").trim();
@@ -896,7 +946,8 @@ btnSave.onclick = async ()=>{
           s2.menge = 1; s2.lagerstand = 1; s2.uebernehmen = 1;
           saveSettings(s2);
           applySettingsToUI();
-        }catch(e){}
+              await loadRecent();
+}catch(e){}
 
         goNextArticle();
     // kurze „Gespeichert“-Bestätigung

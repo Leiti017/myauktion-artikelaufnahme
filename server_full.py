@@ -1028,6 +1028,38 @@ def articles_api(date_from: str | None = None, date_to: str | None = None):
 
     return {"ok": True, "items": items}
 
+@app.get("/api/recent_articles")
+def recent_articles(mitarbeiter: str = "", limit: int = 20):
+    """Letzte aufgenommene Artikel (neueste zuerst).
+    Optional Filter:
+      /api/recent_articles?mitarbeiter=Jan&limit=20
+    """
+    items = _list_articles()  # already newest first
+    m = (mitarbeiter or "").strip().lower()
+    if m:
+        items = [x for x in items if str(x.get("mitarbeiter","") or "").strip().lower() == m]
+
+    try:
+        lim = int(limit or 20)
+    except Exception:
+        lim = 20
+    lim = max(1, min(lim, 100))
+    items = items[:lim]
+
+    # keep payload small
+    out = []
+    for it in items:
+        out.append({
+            "artikelnr": it.get("artikelnr",""),
+            "titel": it.get("titel",""),
+            "created_at": int(it.get("created_at",0) or 0),
+            "sortiment": it.get("sortiment",""),
+            "sortiment_id": it.get("sortiment_id",""),
+            "lagerort": it.get("lagerort",""),
+            "rufpreis": it.get("rufpreis",0),
+        })
+    return {"ok": True, "items": out}
+
 
 @app.get("/api/export.csv")
 def export_csv(from_nr: str | None = None, to_nr: str | None = None):
