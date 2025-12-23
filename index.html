@@ -253,7 +253,7 @@
 </div>
 
 <script>
-  const fArt = document.getElementById('f-artikelnr');
+const fArt = document.getElementById('f-artikelnr');
   const artHint = document.getElementById('artnr-hint');
   const fLager = document.getElementById('f-lagerort');
   const fMenge = document.getElementById('f-menge');
@@ -603,7 +603,7 @@ const btnDeleteArticle = document.getElementById('btn-delete-article');
     applyPriceMode();
 
     if(j.image){
-      thumb.innerHTML = `<img src=\"${j.image}\">`;
+      thumb.innerHTML = `<img src="${j.image}">`;
     }
 
     // Loaded from server -> treat as clean baseline
@@ -629,8 +629,8 @@ const btnDeleteArticle = document.getElementById('btn-delete-article');
           fRuf.value    = (j.rufpreis ?? "");
           applyPriceMode();
           setPill(false);
-          statusText.textContent = \"KI-Vorschlag übernommen.\";
-          toast(\"KI fertig\");
+          statusText.textContent = "KI-Vorschlag übernommen.";
+          toast("KI fertig");
           try{ _markClean('🤖 KI übernommen (' + new Date().toLocaleTimeString() + ')'); }catch(e){}
           return;
         }
@@ -785,11 +785,11 @@ const btnDeleteArticle = document.getElementById('btn-delete-article');
     fRuf.value = (j.rufpreis ?? "");
     applyPriceMode();
     setPill(false);
-    toast(\"KI übernommen\");
+    toast("KI übernommen");
     try{ _markClean('🤖 KI übernommen (' + new Date().toLocaleTimeString() + ')'); }catch(e){}
   };
   function goNextArticle(){
-    const cur = (fArt.value||\"\").trim();
+    const cur = (fArt.value||"").trim();
     if(!/^[0-9]{1,}$/.test(cur)) return;
     const next = String(parseInt(cur,10) + 1);
     fArt.value = next;
@@ -813,7 +813,7 @@ const btnDeleteArticle = document.getElementById('btn-delete-article');
     _dirty = false;
     _lastSnapshot = _snapshot();
     _setSaveStatus('Status: bereit');
-    statusText.textContent = \"Bereit.\";
+    statusText.textContent = "Bereit.";
     try{ window.scrollTo({top:0, behavior:"smooth"});}catch(e){}
     fArt.focus();
   }
