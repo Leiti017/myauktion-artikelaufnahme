@@ -290,10 +290,12 @@ function setToken(t){
       const items = (js.items||[]);
       if(fSort){
         const cur = (fSort.value || "").trim();
-        fSort.innerHTML = '<option value="">Alle</option>' + items.map(x=>{
-          const v = String(x).replaceAll('"','&quot;');
-          return `<option value="${v}">${v}</option>`;
-        }).join('');
+        
+fSort.innerHTML = '<option value="">Alle</option>' + items.map(x=>{
+  const id = (x && (x.id ?? x.ID)) != null ? String(x.id ?? x.ID) : "";
+  const name = String(x && (x.name ?? x.Name) ? (x.name ?? x.Name) : x).replaceAll('"','&quot;');
+  return `<option value="${id}">${name}</option>`;
+}).join('');
         if(cur) fSort.value = cur;
       }
       // auch Management Liste
@@ -304,14 +306,20 @@ function setToken(t){
   function renderSortimente(items){
     const box = document.getElementById('sort-list');
     if(!box) return;
-    box.innerHTML = (items||[]).map(n=>{
-      const safe = String(n).replaceAll("<","&lt;");
+    box.innerHTML = (items||[]).map(x=>{
+      const id = (x && (x.id ?? x.ID)) != null ? String(x.id ?? x.ID) : "";
+      const name = String(x && (x.name ?? x.Name) ? (x.name ?? x.Name) : x);
+      const safeName = name.replaceAll("<","&lt;");
+      const safeId = id.replaceAll("<","&lt;");
       return `
         <div class="flex items-center justify-between gap-2 py-1 border-b border-white/10">
-          <div class="text-sm">${safe}</div>
+          <div class="text-sm min-w-0">
+            <div class="truncate"><span class="opacity-80">Name:</span> ${safeName}</div>
+            <div class="text-[11px] opacity-80"><span class="opacity-80">ID:</span> ${safeId}</div>
+          </div>
           <div class="flex gap-2">
-            <button class="btn btn-primary" style="padding:.25rem .7rem;font-size:.75rem" onclick="renameSortiment('${safe.replaceAll("'","&#39;")}')">Umbennen</button>
-            <button class="btn btn-primary" style="padding:.25rem .7rem;font-size:.75rem" onclick="deleteSortiment('${safe.replaceAll("'","&#39;")}')">Löschen</button>
+            <button class="btn btn-primary" style="padding:.25rem .5rem;font-size:11px" onclick="renameSortiment('${safeId.replaceAll("'","&#39;")}', '${safeName.replaceAll("'","&#39;")}')">Umbennen</button>
+            <button class="btn btn-primary" style="padding:.25rem .5rem;font-size:11px" onclick="deleteSortiment('${safeId.replaceAll("'","&#39;")}', '${safeName.replaceAll("'","&#39;")}')">Löschen</button>
           </div>
         </div>
       `;
@@ -322,23 +330,24 @@ function setToken(t){
     const inp = document.getElementById('sort-add');
     const name = (inp?.value || "").trim();
     if(!name) return;
-    await apiPost("/api/admin/sortimente/add", {name});
+    const r = await apiPost("/api/admin/sortimente/add", {name});
+    if(r && r.item && r.item.id){ alert("Sortiment angelegt\n\nName: " + r.item.name + "\nID: " + r.item.id); }
     inp.value = "";
     await loadSortimente();
     await refresh();
   }
 
-  async function renameSortiment(oldName){
+  async function renameSortiment(id, oldName){
     const nn = prompt("Neuer Name für Sortiment:", oldName);
     if(!nn) return;
-    await apiPost("/api/admin/sortimente/rename", {old: oldName, new: nn});
+    await apiPost("/api/admin/sortimente/rename", {id, new: nn});
     await loadSortimente();
     await refresh();
   }
 
-  async function deleteSortiment(name){
+  async function deleteSortiment(id, name){
     if(!confirm("Sortiment wirklich löschen?\n\n" + name)) return;
-    await apiPost("/api/admin/sortimente/delete", {name});
+    await apiPost("/api/admin/sortimente/delete", {id});
     await loadSortimente();
     await refresh();
   }

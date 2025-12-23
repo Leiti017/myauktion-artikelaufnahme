@@ -35,7 +35,7 @@ def _normalize_title(title: str) -> str:
 
 from pathlib import Path
 from PIL import Image, ImageOps
-import io, json, time, csv, math, os, datetime, zipfile, hashlib, threading
+import io, json, time, csv, math, os, datetime, zipfile, hashlib, threading, random
 import re
 from typing import Any, Dict, Optional, Tuple
 
@@ -270,6 +270,40 @@ def _format_ladenpreis(val: Any) -> str:
         f = 0.0
     return (f"{f:.2f}".replace(".", ",") if f else "")
 
+def _csv_row_from_meta(artikelnr: str, meta: Dict[str, Any]) -> list[str]:
+    """Create one CSV row aligned with CSV_FIELDS."""
+    art = str(artikelnr)
+    bezeichnung = str(meta.get("titel") or "")
+    beschr = str(meta.get("beschreibung") or "")
+    menge = int(meta.get("menge") or 1)
+    preis = _format_rufpreis(meta.get("rufpreis", 0))
+    ladenpreis = _format_ladenpreis(meta.get("retail_price", 0))
+    lagerort = str(meta.get("lagerort") or "")
+    lagerstand = int(meta.get("lagerstand") or 1)
+    uebernehmen = int(meta.get("uebernehmen") or 1)
+    sortiment = str(meta.get("sortiment_id") or meta.get("sortiment") or "")
+    einl_id = str(meta.get("einlieferer_id") or meta.get("einlieferer") or "")
+    angel = str(meta.get("angeliefert") or "")
+    betr = str(meta.get("betriebsmittel") or "")
+    mitarb = str(meta.get("mitarbeiter") or "")
+
+    return [
+        art,
+        bezeichnung,
+        beschr,
+        str(menge),
+        preis,
+        ladenpreis,
+        lagerort,
+        str(lagerstand),
+        str(uebernehmen),
+        sortiment,
+        einl_id,
+        angel,
+        betr,
+        mitarb,
+    ]
+
 def _ensure_export_csv_exists() -> None:
     if not EXPORT_CSV.exists():
         _rebuild_csv_export()
@@ -316,7 +350,7 @@ def _update_csv_row_for_art(artikelnr: str, meta: Dict[str, Any]) -> None:
     lagerort = str(meta.get("lagerort") or "")
     lagerstand = int(meta.get("lagerstand") or 1)
     uebernehmen = int(meta.get("uebernehmen") or 1)
-    sortiment = str(meta.get("sortiment") or "")
+    sortiment = str(meta.get("sortiment_id") or meta.get("sortiment") or "")
     einl_id = str(meta.get("einlieferer_id") or meta.get("einlieferer") or "")
     angel = str(meta.get("angeliefert") or "")
     betr = str(meta.get("betriebsmittel") or "")
@@ -563,6 +597,92 @@ def _gdrive_backup_article(artikelnr: str) -> None:
     except Exception:
         # Backup darf nie das Speichern blockieren
         return
+def _gdrive_list_files(token: str, folder_id: str) -> list[dict]:
+    files: list[dict] = []
+    page_token = None
+    while True:
+        params = {
+            "q": f"'{folder_id}' in parents and trashed=false",
+            "fields": "nextPageToken,files(id,name,mimeType,modifiedTime,size)",
+            "pageSize": 1000,
+        }
+        if page_token:
+            params["pageToken"] = page_token
+        r = requests.get("https://www.googleapis.com/drive/v3/files", headers=_gdrive_headers(token), params=params, timeout=60)
+        r.raise_for_status()
+        j = r.json()
+        files.extend(j.get("files", []) or [])
+        page_token = j.get("nextPageToken")
+        if not page_token:
+            break
+    return files
+
+def _gdrive_download_file(token: str, file_id: str) -> bytes:
+    r = requests.get(f"https://www.googleapis.com/drive/v3/files/{file_id}", headers=_gdrive_headers(token), params={"alt":"media"}, timeout=120)
+    r.raise_for_status()
+    return r.content
+
+def _gdrive_restore_all() -> dict:
+    """Restore RAW_DIR + export CSV from Google Drive (best effort)."""
+    if not _gdrive_enabled():
+        return {"ok": False, "error": "gdrive disabled"}
+    try:
+        token = _gdrive_access_token()
+        folder_id = _gdrive_get_folder_id(token)
+        files = _gdrive_list_files(token, folder_id)
+
+        restored_json = 0
+        restored_jpg = 0
+        restored_csv = 0
+
+        for f in files:
+            name = str(f.get("name") or "")
+            fid = str(f.get("id") or "")
+            if not name or not fid:
+                continue
+
+            # article meta
+            if name.lower().endswith(".json"):
+                out = RAW_DIR / name
+                if not out.exists():
+                    out.write_bytes(_gdrive_download_file(token, fid))
+                    restored_json += 1
+                continue
+
+            # images
+            if name.lower().endswith(".jpg"):
+                out = RAW_DIR / name
+                if not out.exists():
+                    out.write_bytes(_gdrive_download_file(token, fid))
+                    restored_jpg += 1
+                continue
+
+            # daily csv backups (optional restore of latest)
+            if name.startswith("artikel_export_") and name.lower().endswith(".csv"):
+                # keep only the latest by name (YYYY-MM-DD)
+                # download if export not present
+                if not EXPORT_CSV.exists():
+                    EXPORT_CSV.write_bytes(_gdrive_download_file(token, fid))
+                    restored_csv += 1
+
+        # ensure local export exists and consistent
+        _ensure_export_csv_exists()
+        return {"ok": True, "restored_json": restored_json, "restored_jpg": restored_jpg, "restored_csv": restored_csv}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+def _maybe_restore_from_gdrive_on_start():
+    if os.getenv("GDRIVE_RESTORE_ON_START", "").strip() not in {"1","true","yes","on"}:
+        return
+    def _run():
+        try:
+            _gdrive_restore_all()
+        except Exception:
+            pass
+    threading.Thread(target=_run, daemon=True).start()
+
+_maybe_restore_from_gdrive_on_start()
+
 
 # ----------------------------
 # Admin Auth
@@ -702,7 +822,7 @@ def _rebuild_csv_export() -> None:
             "Lagerort": str(d.get("lagerort", "") or ""),
             "Lagerstand": int(d.get("lagerstand", 1) or 1),
             "Uebernehmen": int(d.get("uebernehmen", 1) or 1),
-            "Sortiment": str(d.get("sortiment", "") or ""),
+            "Sortiment": str(d.get("sortiment_id") or d.get("sortiment") or ""),
             "Einlieferer-ID": str(d.get("einlieferer_id", d.get("einlieferer", "")) or ""),
             "Angeliefert": str(d.get("angeliefert", "") or ""),
             "Betriebsmittel": str(d.get("betriebsmittel", "") or ""),
@@ -823,25 +943,122 @@ def _default_sortimente() -> list[str]:
     # Beispiele (kannst du im Admin ändern)
     return ["(22) Tiernahrung 45"]
 
-def _load_sortimente() -> list[str]:
+def _generate_sortiment_id(existing: set[int]) -> int:
+    """Generate a short numeric Sortiment-ID (4-6 digits) that is unique."""
+    # prefer 4 digits for readability; fall back to 5/6 if crowded
+    for digits in (4, 5, 6):
+        lo, hi = 10 ** (digits - 1), (10 ** digits) - 1
+        for _ in range(5000):
+            cand = random.randint(lo, hi)
+            if cand not in existing:
+                return cand
+    # last resort
+    cand = int(time.time()) % 1000000
+    while cand in existing:
+        cand = (cand + 1) % 1000000
+    return cand
+
+def _normalize_sortimente(raw: Any) -> list[dict]:
+    """Accept legacy formats and normalize to: [{id:int, name:str}, ...]."""
+    items: list[dict] = []
+    seen_ids: set[int] = set()
+    seen_names: set[str] = set()
+
+    if isinstance(raw, list):
+        # Legacy: ["(22) Drogerie", "..."]
+        if raw and all(isinstance(x, str) for x in raw):
+            for name in raw:
+                n = str(name).strip()
+                if not n or n.lower() in seen_names:
+                    continue
+                sid = _generate_sortiment_id(seen_ids)
+                items.append({"id": sid, "name": n})
+                seen_ids.add(sid)
+                seen_names.add(n.lower())
+            return items
+
+        # New: [{"id":2349,"name":"..."}, ...]
+        if raw and all(isinstance(x, dict) for x in raw):
+            for x in raw:
+                try:
+                    sid = int(x.get("id"))
+                except Exception:
+                    sid = None
+                n = str(x.get("name") or "").strip()
+                if not n:
+                    continue
+                if sid is None or sid in seen_ids:
+                    sid = _generate_sortiment_id(seen_ids)
+                if n.lower() in seen_names:
+                    continue
+                items.append({"id": sid, "name": n})
+                seen_ids.add(sid)
+                seen_names.add(n.lower())
+            return items
+
+    # fallback
+    for name in _default_sortimente():
+        n = str(name).strip()
+        if not n or n.lower() in seen_names:
+            continue
+        sid = _generate_sortiment_id(seen_ids)
+        items.append({"id": sid, "name": n})
+        seen_ids.add(sid)
+        seen_names.add(n.lower())
+    return items
+
+def _load_sortimente() -> list[dict]:
+    """Return list of sortiments: [{id:int, name:str}, ...]."""
     if SORTIMENTE_JSON.exists():
         try:
             data = json.loads(SORTIMENTE_JSON.read_text("utf-8"))
-            if isinstance(data, list):
-                return [str(x).strip() for x in data if str(x).strip()]
+            items = _normalize_sortimente(data)
+            # auto-migrate legacy file to new format once
+            if isinstance(data, list) and data and isinstance(data[0], str):
+                _save_sortimente(items)
+            return items
         except Exception:
             pass
-    return _default_sortimente()
+    items = _normalize_sortimente(_default_sortimente())
+    try:
+        _save_sortimente(items)
+    except Exception:
+        pass
+    return items
 
-def _save_sortimente(items: list[str]) -> None:
-    cleaned = []
-    for x in items:
-        s = str(x).strip()
-        if not s:
+def _save_sortimente(items: list[dict]) -> None:
+    cleaned: list[dict] = []
+    seen_ids: set[int] = set()
+    seen_names: set[str] = set()
+    for x in (items or []):
+        if not isinstance(x, dict):
             continue
-        if s not in cleaned:
-            cleaned.append(s)
+        n = str(x.get("name") or "").strip()
+        if not n:
+            continue
+        try:
+            sid = int(x.get("id"))
+        except Exception:
+            sid = None
+        if sid is None or sid in seen_ids:
+            sid = _generate_sortiment_id(seen_ids)
+        if n.lower() in seen_names:
+            continue
+        cleaned.append({"id": sid, "name": n})
+        seen_ids.add(sid)
+        seen_names.add(n.lower())
     SORTIMENTE_JSON.write_text(json.dumps(cleaned, ensure_ascii=False, indent=2), "utf-8")
+
+def _sortiment_name_by_id(sortiment_id: Any) -> str:
+    try:
+        sid = int(sortiment_id)
+    except Exception:
+        return ""
+    for x in _load_sortimente():
+        if int(x.get("id")) == sid:
+            return str(x.get("name") or "")
+    return ""
+
 
 
 # ----------------------------
@@ -910,6 +1127,33 @@ def health():
 def sortimente_public():
     return {"ok": True, "items": _load_sortimente()}
 
+@app.get("/api/recent_articles")
+def recent_articles(mitarbeiter: str = "", limit: int = 12):
+    """Letzte aufgenommene Artikel – optional pro Mitarbeiter."""
+    limit = max(1, min(int(limit or 12), 50))
+    who = (mitarbeiter or "").strip().lower()
+    items = []
+    for p in RAW_DIR.glob("*.json"):
+        try:
+            mj = json.loads(p.read_text("utf-8"))
+        except Exception:
+            continue
+        m = str(mj.get("mitarbeiter") or "").strip().lower()
+        if who and m != who:
+            continue
+        nr = str(mj.get("artikelnr", p.stem))
+        items.append({
+            "artikelnr": nr,
+            "titel": str(mj.get("titel") or ""),
+            "updated_at": int(mj.get("updated_at", 0) or 0),
+            "created_at": int(mj.get("created_at", 0) or 0),
+            "sortiment_id": str(mj.get("sortiment_id") or ""),
+            "sortiment_name": str(mj.get("sortiment_name") or mj.get("sortiment") or ""),
+        })
+    items.sort(key=lambda x: (x.get("updated_at", 0), x.get("created_at", 0)), reverse=True)
+    return {"ok": True, "items": items[:limit]}
+
+
 
 @app.get("/api/articles")
 def articles_api(date_from: str | None = None, date_to: str | None = None):
@@ -942,7 +1186,7 @@ def articles_api(date_from: str | None = None, date_to: str | None = None):
 
 
 @app.get("/api/export.csv")
-def export_csv(from_nr: str | None = None, to_nr: str | None = None):
+def export_csv(from_nr: str | None = None, to_nr: str | None = None, sortiment_id: str | None = None):
     """
     Export CSV (UTF-8 mit BOM für Excel). Optionaler Bereich:
       /api/export.csv?from_nr=123458&to_nr=123480
@@ -950,7 +1194,7 @@ def export_csv(from_nr: str | None = None, to_nr: str | None = None):
     _ensure_export_csv_exists()
 
     # Kein Filter -> Datei direkt ausliefern
-    if not from_nr and not to_nr:
+    if not from_nr and not to_nr and not sortiment_id:
         return FileResponse(str(EXPORT_CSV), filename="artikel_export.csv", media_type="text/csv")
 
     # Filter -> in-memory CSV erzeugen
@@ -978,6 +1222,9 @@ def export_csv(from_nr: str | None = None, to_nr: str | None = None):
         if not _in_range(art):
             continue
         meta = _load_meta_json(art)
+        if sortiment_id:
+            if str(meta.get("sortiment_id") or "").strip() != str(sortiment_id).strip():
+                continue
         rows.append([
             art,
             str(int(meta.get("menge") or 1)),
@@ -1333,10 +1580,41 @@ def save(data: Dict[str, Any]):
 
     mj = _load_meta_json(artikelnr)
 
+
     # Textfelder
-    for k in ["titel", "beschreibung", "lagerort", "einlieferer", "mitarbeiter", "kategorie", "sortiment"]:
+    for k in ["titel", "beschreibung", "lagerort", "einlieferer", "mitarbeiter", "kategorie"]:
         if k in data and data[k] is not None:
             mj[k] = str(data[k])
+
+    # Sortiment: Frontend sendet jetzt primär die ID (value), Name wird serverseitig ergänzt.
+    sort_id = data.get("sortiment_id", None)
+    if sort_id is None:
+        # backward compat: "sortiment" kann entweder Name (alt) oder ID (neu) sein
+        sort_id = data.get("sortiment", None)
+
+    sort_name = ""
+    sort_id_int: Optional[int] = None
+    if sort_id is not None and str(sort_id).strip() != "":
+        try:
+            sort_id_int = int(str(sort_id).strip())
+            sort_name = _sortiment_name_by_id(sort_id_int)
+        except Exception:
+            # treat as legacy name
+            sort_name = str(sort_id).strip()
+            sort_id_int = None
+
+    # allow explicit name (optional)
+    if data.get("sortiment_name") is not None:
+        sort_name = str(data.get("sortiment_name") or "").strip() or sort_name
+
+    if sort_id_int is not None:
+        mj["sortiment_id"] = sort_id_int
+    if sort_name:
+        mj["sortiment_name"] = sort_name
+        mj["sortiment"] = sort_name  # legacy field kept for older tools/UI
+    elif "sortiment" in data and data["sortiment"] is not None:
+        # legacy name-only
+        mj["sortiment"] = str(data["sortiment"]).strip()
 
     # Settings-Felder (für CSV Export)
     if "menge" in data: mj["menge"] = int(data.get("menge") or 1)
@@ -1450,11 +1728,18 @@ def admin_sortimente_add(request: Request, data: Dict[str, Any]):
     name = str(data.get("name", "") or "").strip()
     if not name:
         return JSONResponse({"ok": False, "error": "name fehlt"}, status_code=400)
+
     items = _load_sortimente()
-    if name not in items:
-        items.append(name)
-        _save_sortimente(items)
-    return {"ok": True, "items": _load_sortimente()}
+    # already exists (case-insensitive)
+    if any(str(x.get("name","")).strip().lower() == name.lower() for x in items):
+        return {"ok": True, "items": _load_sortimente()}
+
+    existing_ids = {int(x.get("id")) for x in items if str(x.get("id","")).strip().isdigit()}
+    sid = _generate_sortiment_id(existing_ids)
+    items.append({"id": sid, "name": name})
+    _save_sortimente(items)
+    return {"ok": True, "item": {"id": sid, "name": name}, "items": _load_sortimente()}
+
 
 
 @app.post("/api/admin/sortimente/rename")
@@ -1462,14 +1747,43 @@ def admin_sortimente_rename(request: Request, data: Dict[str, Any]):
     guard = _admin_guard(request)
     if guard:
         return guard
-    old = str(data.get("old", "") or "").strip()
-    new = str(data.get("new", "") or "").strip()
-    if not old or not new:
-        return JSONResponse({"ok": False, "error": "old/new fehlt"}, status_code=400)
+
+    # preferred: by id
+    sortiment_id = data.get("id", None)
+    new_name = str(data.get("new", "") or data.get("name", "") or "").strip()
+
+    # legacy: old/new by name
+    old_name = str(data.get("old", "") or "").strip()
+
+    if not new_name:
+        return JSONResponse({"ok": False, "error": "new/name fehlt"}, status_code=400)
+
     items = _load_sortimente()
-    items = [new if x == old else x for x in items]
-    _save_sortimente(items)
+    changed = False
+
+    if sortiment_id is not None and str(sortiment_id).strip() != "":
+        try:
+            sid = int(sortiment_id)
+        except Exception:
+            return JSONResponse({"ok": False, "error": "id ungültig"}, status_code=400)
+        for x in items:
+            if int(x.get("id")) == sid:
+                x["name"] = new_name
+                changed = True
+                break
+    elif old_name:
+        for x in items:
+            if str(x.get("name","")).strip().lower() == old_name.lower():
+                x["name"] = new_name
+                changed = True
+                break
+    else:
+        return JSONResponse({"ok": False, "error": "id oder old fehlt"}, status_code=400)
+
+    if changed:
+        _save_sortimente(items)
     return {"ok": True, "items": _load_sortimente()}
+
 
 
 @app.post("/api/admin/sortimente/delete")
@@ -1477,12 +1791,25 @@ def admin_sortimente_delete(request: Request, data: Dict[str, Any]):
     guard = _admin_guard(request)
     if guard:
         return guard
-    name = str(data.get("name", "") or "").strip()
-    if not name:
-        return JSONResponse({"ok": False, "error": "name fehlt"}, status_code=400)
-    items = [x for x in _load_sortimente() if x != name]
+
+    sortiment_id = data.get("id", None)
+    name = str(data.get("name", "") or "").strip()  # legacy
+
+    items = _load_sortimente()
+    if sortiment_id is not None and str(sortiment_id).strip() != "":
+        try:
+            sid = int(sortiment_id)
+        except Exception:
+            return JSONResponse({"ok": False, "error": "id ungültig"}, status_code=400)
+        items = [x for x in items if int(x.get("id")) != sid]
+    elif name:
+        items = [x for x in items if str(x.get("name","")).strip().lower() != name.lower()]
+    else:
+        return JSONResponse({"ok": False, "error": "id oder name fehlt"}, status_code=400)
+
     _save_sortimente(items)
     return {"ok": True, "items": _load_sortimente()}
+
 
 @app.get("/api/admin/budget")
 def admin_budget(request: Request):
@@ -1509,7 +1836,7 @@ def admin_budget(request: Request):
 
 
 @app.get("/api/admin/articles")
-def admin_articles(request: Request, sortiment: str = "", only_failed: int = 0):
+def admin_articles(request: Request, sortiment: str = "", sortiment_id: str = "", only_failed: int = 0):
     guard = _admin_guard(request)
     if guard:
         return guard
@@ -1523,10 +1850,17 @@ def admin_articles(request: Request, sortiment: str = "", only_failed: int = 0):
 
         nr = str(mj.get("artikelnr", p.stem))
         cat = (mj.get("kategorie", "") or "").strip()
-        sorti = (mj.get("sortiment", "") or "").strip()
+        sorti_name = (mj.get("sortiment_name") or mj.get("sortiment") or "").strip()
+        sorti_id = str(mj.get("sortiment_id") or "").strip()
 
-        if sortiment and sorti.lower() != sortiment.strip().lower():
-            continue
+        # Filter: bevorzugt nach ID, fallback nach Name (legacy)
+        if sortiment_id:
+            if sorti_id != str(sortiment_id).strip():
+                continue
+        elif sortiment:
+            if sorti_name.lower() != sortiment.strip().lower():
+                continue
+
         if only_failed and (mj.get("ki_source") != "failed"):
             continue
 
@@ -1541,7 +1875,9 @@ def admin_articles(request: Request, sortiment: str = "", only_failed: int = 0):
             "titel": mj.get("titel", "") or "",
             "beschreibung": mj.get("beschreibung", "") or "",
             "kategorie": cat,
-            "sortiment": sorti,
+            "sortiment": sorti_name,
+            "sortiment_id": sorti_id,
+            "sortiment_name": sorti_name,
             "retail_price": mj.get("retail_price", 0.0) or 0.0,
             "rufpreis": mj.get("rufpreis", 0.0) or 0.0,
             "reviewed": bool(mj.get("reviewed", False)),

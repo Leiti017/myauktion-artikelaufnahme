@@ -244,8 +244,8 @@
           <button id="btn-toggle-retail" class="btn btn-ghost text-[11px]" type="button">Listenpreis ausblenden</button>
         </div>
 
-        <label class="block mb-1 text-xs opacity-80">System-Log</label>
-        <div id="log" class="text-[11px] text-slate-900 bg-white/90 rounded-xl p-2 max-h-40 overflow-y-auto"></div>
+        <label class="block mb-1 text-xs opacity-80">Zuletzt aufgenommene Artikel (je Mitarbeiter)</label>
+        <div id="recent" class="text-[11px] text-slate-900 bg-white/90 rounded-xl p-2 max-h-48 overflow-y-auto"></div>
 
               </section>
     </div>
@@ -340,7 +340,7 @@ const btnDeleteArticle = document.getElementById('btn-delete-article');
   });
 
 
-  const logEl = document.getElementById('log');
+  const recentEl = document.getElementById('recent');
   const toastWrap = document.getElementById('toast-wrap');
 
   let selectedImageUrl = "";
@@ -498,12 +498,38 @@ const btnDeleteArticle = document.getElementById('btn-delete-article');
     }
   }
 
-  function log(msg){
-    const t = new Date().toLocaleTimeString();
-    const d = document.createElement('div');
-    d.textContent = `[${t}] ${msg}`;
-    logEl.prepend(d);
+  function renderRecent(items){
+    if(!recentEl) return;
+    if(!items || !items.length){
+      recentEl.innerHTML = '<div class="opacity-70">Noch keine Artikel gefunden.</div>';
+      return;
+    }
+    recentEl.innerHTML = items.map(it=>{
+      const nr = (it.artikelnr||"");
+      const title = (it.titel||"").replaceAll('<','&lt;').replaceAll('>','&gt;');
+      const dt = it.updated_at ? new Date((it.updated_at||0)*1000).toLocaleString() : '';
+      return `<div class="flex items-center justify-between gap-2 py-1 border-b border-slate-200/60">
+        <div class="min-w-0">
+          <div class="font-semibold truncate">${nr} <span class="font-normal opacity-80">${title}</span></div>
+          <div class="text-[10px] opacity-70">${dt}</div>
+        </div>
+        <button class="btn btn-ghost text-[10px] px-2 py-1" type="button" data-edit="${nr}">Bearbeiten</button>
+      </div>`;
+    }).join('');
   }
+
+async function refreshRecent(){
+    if(!recentEl) return;
+    const who = (sMitarbeiter?.value || "").trim();
+    try{
+      const res = await fetch('/api/recent_articles?mitarbeiter=' + encodeURIComponent(who) + '&limit=12');
+      const j = await res.json();
+      renderRecent(j.items||[]);
+    }catch(e){
+      recentEl.innerHTML = '<div class="opacity-70">Fehler beim Laden.</div>';
+    }
+  }
+
   function toast(msg){
     const el = document.createElement('div');
     el.className = 'toast';
@@ -734,7 +760,7 @@ const btnDeleteArticle = document.getElementById('btn-delete-article');
     fd.append('file', file);
     fd.append('artikelnr', art);
 
-    log("Upload startet …");
+    toast("Upload startet …");
     setPill(true, "Upload …");
 
     const res = await fetch('/api/upload', { method:'POST', body: fd });
@@ -745,7 +771,7 @@ const btnDeleteArticle = document.getElementById('btn-delete-article');
       return;
     }
 
-    log("Upload OK: " + j.filename);
+    toast("Upload OK");
     toast("Foto hochgeladen");
     await refreshImages();
     await pollUntilDone(art, 18000);
@@ -852,6 +878,7 @@ btnSave.onclick = async ()=>{
           einlieferer_id: s.einlieferer_id,
           angeliefert: s.angeliefert,
           betriebsmittel: s.betriebsmittel,
+          sortiment_id: s.sortiment,
           sortiment: s.sortiment,
           einlieferer: s.einlieferer_id,
 
@@ -875,7 +902,7 @@ btnSave.onclick = async ()=>{
           return;
         }
         toast("Gespeichert");
-        log("Gespeichert: " + art);
+        
         try{
           _dirty = false;
           _lastSnapshot = _snapshot();
@@ -921,13 +948,15 @@ btnSave.onclick = async ()=>{
       try{
         const res = await fetch('/api/sortimente');
         const j = await res.json();
-        const items = (j.items||[]);
-        if(sSortiment){
-          const cur = (loadSettings().sortiment || "");
-          sSortiment.innerHTML = '<option value="">(kein Sortiment)</option>' + items.map(x=>{
-            const v = String(x).replaceAll('"','&quot;');
-            return `<option value="${v}">${v}</option>`;
-          }).join('');
+        
+const items = (j.items||[]);
+if(sSortiment){
+  const cur = (loadSettings().sortiment || "");
+  sSortiment.innerHTML = '<option value="">(kein Sortiment)</option>' + items.map(x=>{
+    const id = (x && (x.id ?? x.ID)) != null ? String(x.id ?? x.ID) : "";
+    const name = String(x && (x.name ?? x.Name) ? (x.name ?? x.Name) : x).replaceAll('"','&quot;');
+    return `<option value="${id}">${name}</option>`;
+  }).join('');
           if(cur) sSortiment.value = cur;
         }
       }catch(e){}
@@ -938,6 +967,7 @@ btnSave.onclick = async ()=>{
     applySettingsToUI();
     applyPriceMode();
     loadSortimente();
+    refreshRecent();
     try{ _setSaveStatus('Status: bereit'); }catch(e){}
 
     // Bearbeiten-Modus: aus Admin/Gesamtartikel kommend
@@ -1046,7 +1076,30 @@ btnSave.onclick = async ()=>{
       settingsPanel.classList.remove('hidden');
       btnSettings.textContent = "⬆️ Einstellungen";
     }
+  
+// Letzte Artikel je Mitarbeiter
+if(sMitarbeiter){
+  sMitarbeiter.addEventListener('change', ()=>{
+    const s = loadSettings();
+    s.mitarbeiter = sMitarbeiter.value;
+    saveSettings(s);
+    refreshRecent();
   });
+}
+if(recentEl){
+  recentEl.addEventListener('click', async (ev)=>{
+    const btn = ev.target.closest('button[data-edit]');
+    if(!btn) return;
+    const nr = btn.getAttribute('data-edit') || "";
+    if(!nr) return;
+    fArt.value = nr;
+    await refreshMeta();
+    // optional: Bilder neu laden
+    try{ await refreshImages(); }catch(e){}
+    toast("Artikel geladen: " + nr);
+  });
+}
+});
 </script>
 </body>
 </html>
