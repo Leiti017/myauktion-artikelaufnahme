@@ -443,26 +443,40 @@ ID: " + id)) return;
   if(btnBudgetUnlock){
     btnBudgetUnlock.onclick = async ()=>{
       const entered = (budgetTokenInp?.value || "").trim();
-      const t = (getToken() || "").trim();
+      let t = (getToken() || "").trim();
 
-      // Simple UI-Schutz: Budget nur anzeigen, wenn Passwort nochmals eingegeben wurde
       if(!entered) return;
+
+      // Wenn noch kein Admin-Token gespeichert ist (User hängt im Lock-Screen),
+      // nehmen wir das eingegebene Passwort als Admin-Token und versuchen damit zu entsperren.
+      if(!t){
+        setToken(entered);
+        t = entered;
+      }
+
+      // Wenn Token existiert, muss es übereinstimmen.
       if(t && entered !== t){
-        alert("Falsches Budget-Passwort.");
+        alert("Falsches Passwort.");
         return;
       }
 
+      // Budget freischalten
       sessionStorage.setItem("MYAUKTION_BUDGET_UNLOCKED", "1");
       budgetUnlocked = true;
       budgetLocked.classList.add("hidden");
       budgetContent.classList.remove("hidden");
+
+      // WICHTIG: Budget-Button soll auch Admin entsperren (Content anzeigen)
+      try{
+        locked.classList.add("hidden");
+        content.classList.remove("hidden");
+      }catch(e){}
+
       await loadSortimente();
       await refresh();
     };
   }
-
-
-  fSort.onchange = refresh;
+fSort.onchange = refresh;
   fFailed.onchange = refresh;
   fQ.oninput = ()=> refresh();
 
