@@ -1204,15 +1204,16 @@ def recent_articles(mitarbeiter: str = "", limit: int = 20):
 @app.get("/api/export.csv")
 def export_csv(from_nr: str | None = None, to_nr: str | None = None, sortiment_id: str | None = None):
     """
-    Export CSV (UTF-8 mit BOM für Excel). Optionaler Bereich:
+    Export CSV (UTF-8 mit BOM für Excel). Optional:
+      - Bereich: from_nr/to_nr
+      - Filter: sortiment_id
       /api/export.csv?from_nr=123458&to_nr=123480
     """
     _ensure_export_csv_exists()
 
-    # Kein Filter -> Datei direkt ausliefern
-    if not from_nr and not to_nr:
+    # Kein Filter -> Datei direkt ausliefern (nur wenn wirklich kein Filter aktiv)
+    if not from_nr and not to_nr and not sortiment_id:
         return FileResponse(str(EXPORT_CSV), filename="artikel_export.csv", media_type="text/csv")
-
     # Filter -> in-memory CSV erzeugen
     def _in_range(n: str) -> bool:
         try:
