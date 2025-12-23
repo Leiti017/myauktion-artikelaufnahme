@@ -548,10 +548,22 @@ def _gdrive_backup_article(artikelnr: str) -> None:
         # Upload/Update daily CSV
         day = time.strftime("%Y-%m-%d")
         daily_name = f"artikel_export_{day}.csv"
+        latest_name = "artikel_export_latest.csv"
         # ensure current CSV exists
         _ensure_export_csv_exists()
         csv_bytes = EXPORT_CSV.read_bytes()
         _gdrive_upload_bytes(token, folder_id, daily_name, csv_bytes, "text/csv")
+        # always keep an easy-to-find latest snapshot
+        _gdrive_upload_bytes(token, folder_id, latest_name, csv_bytes, "text/csv")
+
+        # Upload meta JSON for article
+        try:
+            meta_name = f"{artikelnr}.json"
+            meta_bytes = _meta_path(artikelnr).read_bytes() if _meta_path(artikelnr).exists() else b""
+            if meta_bytes:
+                _gdrive_upload_bytes(token, folder_id, meta_name, meta_bytes, "application/json")
+        except Exception:
+            pass
 
         # Upload images for article (processed preferred, else raw)
         pics = _list_image_paths(artikelnr, PROCESSED_DIR)
@@ -564,6 +576,128 @@ def _gdrive_backup_article(artikelnr: str) -> None:
         # Backup darf nie das Speichern blockieren
         return
 
+
+# ----------------------------
+# Google Drive Restore (bei Render-ReDeploy / ohne Persistent Disk)
+# - Lädt *.json und *.jpg aus dem Backup-Ordner zurück in uploads/raw
+# - Danach wird CSV neu gebaut
+# - Läuft im Background-Thread (damit Startup schnell bleibt)
+# ----------------------------
+RESTORE_MARKER = EXPORT_DIR / "restore_done.marker"
+
+def _gdrive_list_files_in_folder(token: str, folder_id: str):
+    files = []
+    page_token = None
+    while True:
+        params = {"q": f"'{folder_id}' in parents and trashed=false",
+                  "fields": "nextPageToken,files(id,name,modifiedTime)",
+                  "pageSize": 1000}
+        if page_token:
+            params["pageToken"] = page_token
+        r = requests.get("https://www.googleapis.com/drive/v3/files", headers=_gdrive_headers(token), params=params, timeout=60)
+        r.raise_for_status()
+        js = r.json()
+        files.extend(js.get("files", []))
+        page_token = js.get("nextPageToken")
+        if not page_token:
+            break
+    return files
+
+def _gdrive_download_file(token: str, file_id: str) -> bytes:
+    r = requests.get(f"https://www.googleapis.com/drive/v3/files/{file_id}", headers=_gdrive_headers(token), params={"alt":"media"}, timeout=120)
+    r.raise_for_status()
+    return r.content
+
+def _gdrive_restore_all() -> None:
+    if not _gdrive_enabled():
+        return
+    # only once per deploy/container
+    try:
+        if RESTORE_MARKER.exists():
+            return
+    except Exception:
+        pass
+
+    try:
+        token = _gdrive_access_token()
+        folder_id = _gdrive_get_folder_id(token)
+
+        # If we already have data (e.g. dev/local), skip restore
+        try:
+            has_any = any(RAW_DIR.glob("*.json")) or any(RAW_DIR.glob("*.jpg"))
+            if has_any:
+                RESTORE_MARKER.write_text("skip_existing", "utf-8")
+                return
+        except Exception:
+            pass
+
+        files = _gdrive_list_files_in_folder(token, folder_id)
+
+        # restore JSON first (so meta exists even before images)
+        json_files = [f for f in files if str(f.get("name","")).lower().endswith(".json")]
+        jpg_files  = [f for f in files if str(f.get("name","")).lower().endswith(".jpg")]
+
+        RAW_DIR.mkdir(parents=True, exist_ok=True)
+
+        restored = 0
+        for f in json_files:
+            name = str(f.get("name","") or "")
+            fid = str(f.get("id","") or "")
+            if not name or not fid:
+                continue
+            # Only accept pure article meta names like 123456.json
+            if not re.match(r"^\d+\.json$", name):
+                continue
+            try:
+                data = _gdrive_download_file(token, fid)
+                (RAW_DIR / name).write_bytes(data)
+                restored += 1
+            except Exception:
+                pass
+
+        # restore images
+        for f in jpg_files:
+            name = str(f.get("name","") or "")
+            fid = str(f.get("id","") or "")
+            if not name or not fid:
+                continue
+            # Only accept article image scheme
+            if not re.match(r"^\d+(?:_\d+)?\.jpg$", name, flags=re.I):
+                continue
+            try:
+                data = _gdrive_download_file(token, fid)
+                (RAW_DIR / name).write_bytes(data)
+                restored += 1
+            except Exception:
+                pass
+
+        # Rebuild CSV from restored JSONs
+        try:
+            _rebuild_csv_export()
+        except Exception:
+            pass
+
+        try:
+            RESTORE_MARKER.write_text(f"restored:{restored}", "utf-8")
+        except Exception:
+            pass
+
+        print(f"[GDRIVE] Restore done. Files restored: {restored}")
+    except Exception as e:
+        try:
+            RESTORE_MARKER.write_text("failed:" + str(e)[:200], "utf-8")
+        except Exception:
+            pass
+        print("[GDRIVE] Restore failed:", e)
+
+def _start_restore_thread():
+    try:
+        if not _gdrive_enabled():
+            return
+        th = threading.Thread(target=_gdrive_restore_all, daemon=True)
+        th.start()
+    except Exception:
+        return
 # ----------------------------
 # Admin Auth
 # ----------------------------
@@ -971,6 +1105,12 @@ def _list_articles() -> list[dict]:
     items.sort(key=lambda x: int(x.get("created_at", 0) or 0), reverse=True)
     return items
 
+
+@app.on_event("startup")
+def _on_startup():
+    # Restore alte Artikel aus Google Drive, falls Render Container neu gestartet wurde
+    _start_restore_thread()
+
 # ----------------------------
 # Routes
 # ----------------------------
@@ -1062,7 +1202,7 @@ def recent_articles(mitarbeiter: str = "", limit: int = 20):
 
 
 @app.get("/api/export.csv")
-def export_csv(from_nr: str | None = None, to_nr: str | None = None):
+def export_csv(from_nr: str | None = None, to_nr: str | None = None, sortiment_id: str | None = None):
     """
     Export CSV (UTF-8 mit BOM für Excel). Optionaler Bereich:
       /api/export.csv?from_nr=123458&to_nr=123480
@@ -1098,6 +1238,9 @@ def export_csv(from_nr: str | None = None, to_nr: str | None = None):
         if not _in_range(art):
             continue
         meta = _load_meta_json(art)
+        if sortiment_id:
+            if str(meta.get('sortiment_id','') or '').strip() != str(sortiment_id).strip():
+                continue
         rows.append([
             art,
             str(int(meta.get("menge") or 1)),
@@ -1162,7 +1305,7 @@ def _in_range_art(n: str, from_nr: str | None, to_nr: str | None) -> bool:
 @app.get("/api/images.zip")
 @app.get("/api/export_images.zip")
 @app.get("/api/bilder.zip")
-def export_images_zip(request: Request, from_nr: str | None = None, to_nr: str | None = None):
+def export_images_zip(request: Request, from_nr: str | None = None, to_nr: str | None = None, sortiment_id: str | None = None):
     """ZIP mit allen Bildern (RAW) für Artikel (optional Von/Bis ArtikelNr).
     Admin-Token geschützt (X-Admin-Token oder ?token=...).
     """
@@ -1177,6 +1320,13 @@ def export_images_zip(request: Request, from_nr: str | None = None, to_nr: str |
             art = jf.stem
             if (from_nr or to_nr) and not _in_range_art(art, from_nr, to_nr):
                 continue
+            if sortiment_id:
+                try:
+                    meta = _load_meta_json(art)
+                    if str(meta.get('sortiment_id','') or '').strip() != str(sortiment_id).strip():
+                        continue
+                except Exception:
+                    pass
             for p in _images_for_art(art):
                 try:
                     # in zip nur Dateiname, weil schon eindeutig (ART...jpg)
