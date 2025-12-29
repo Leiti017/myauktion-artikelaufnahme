@@ -779,28 +779,28 @@ def _gdrive_restore_all() -> dict:
 
             # daily csv backups (optional restore of latest)
             if name.startswith("artikel_export_") and name.lower().endswith(".csv"):
-                # keep only the latest by name (YYYY-MM-DD)
                 # download if export not present
                 if not EXPORT_CSV.exists():
                     EXPORT_CSV.write_bytes(_gdrive_download_file(token, fid))
                     restored_csv += 1
 
         # ensure local export exists and consistent
-_ensure_export_csv_exists()
+        _ensure_export_csv_exists()
 
-# NEW: wenn Drive nur CSV+JPG hat -> JSON-Metadaten aus Export-CSV wiederherstellen
-try:
-    res_rebuild = _rebuild_meta_from_export_csv_if_missing()
-except Exception as e:
-    res_rebuild = {"ok": False, "error": str(e)}
+        # NEW: wenn Drive nur CSV+JPG hat -> JSON-Metadaten aus Export-CSV wiederherstellen
+        try:
+            res_rebuild = _rebuild_meta_from_export_csv_if_missing()
+        except Exception as e:
+            res_rebuild = {"ok": False, "error": str(e)}
 
-return {
-    "ok": True,
-    "restored_json": restored_json,
-    "restored_jpg": restored_jpg,
-    "restored_csv": restored_csv,
-    "rebuild_from_csv": res_rebuild,
-}except Exception as e:
+        return {
+            "ok": True,
+            "restored_json": restored_json,
+            "restored_jpg": restored_jpg,
+            "restored_csv": restored_csv,
+            "rebuild_from_csv": res_rebuild,
+        }
+    except Exception as e:
         return {"ok": False, "error": str(e)}
 
 def _maybe_restore_from_gdrive_on_start():
