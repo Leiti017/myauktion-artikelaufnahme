@@ -3,3 +3,5 @@ uvicorn
 python-multipart
 pillow
 requests
+rembg==2.0.58
+onnxruntime==1.17.3
