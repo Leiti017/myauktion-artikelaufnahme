@@ -34,7 +34,7 @@ def _normalize_title(title: str) -> str:
     return t
 
 from pathlib import Path
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageFilter, ImageDraw
 import io, json, time, csv, math, os, datetime, zipfile, hashlib, threading, random
 import re
 from typing import Any, Dict, Optional, Tuple
@@ -73,6 +73,139 @@ PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 EXPORT_CSV = EXPORT_DIR / "artikel_export.csv"
+
+
+# ----------------------------
+# Bilder optimieren (wie Desktop-Version):
+# - Freistellen via rembg (u2net) falls installiert
+# - Bodenschatten
+# - 750x750 JPG, weißer Hintergrund
+# Läuft im Hintergrund, damit Aufnehmer nicht warten müssen.
+# ----------------------------
+try:
+    from rembg import new_session as _rembg_new_session, remove as _rembg_remove  # type: ignore
+    _REMBG_SESSION = _rembg_new_session("u2net")
+except Exception:
+    _rembg_remove = None
+    _REMBG_SESSION = None
+
+IMAGE_TARGET_SIZE = (750, 750)
+_IMG_LOCKS: dict[str, threading.Lock] = {}
+
+def _img_lock(key: str) -> threading.Lock:
+    k = str(key or "")
+    if k not in _IMG_LOCKS:
+        _IMG_LOCKS[k] = threading.Lock()
+    return _IMG_LOCKS[k]
+
+def _processed_path_for(raw_path: Path) -> Path:
+    # keep SAME filename, but store in processed/
+    return PROCESSED_DIR / raw_path.name
+
+def _processed_exists_newer(raw_path: Path) -> bool:
+    try:
+        out = _processed_path_for(raw_path)
+        return out.exists() and out.stat().st_mtime >= raw_path.stat().st_mtime
+    except Exception:
+        return False
+
+def _optimize_image_like_desktop(raw_path: Path) -> Optional[Path]:
+    """Optimiert 1 Bild wie im alten Desktop-Tool.
+    Returns processed path or None if optimization not available/failed.
+    """
+    if _rembg_remove is None:
+        return None
+
+    try:
+        with Image.open(raw_path) as im:
+            im = ImageOps.exif_transpose(im).convert("RGBA")
+            buf = io.BytesIO()
+            im.save(buf, format="PNG")
+            buf.seek(0)
+
+            cut = _rembg_remove(buf.read(), session=_REMBG_SESSION)  # PNG bytes with alpha
+            fg = Image.open(io.BytesIO(cut)).convert("RGBA")
+
+        # alpha cleanup
+        alpha = fg.split()[-1]
+        alpha = alpha.point(lambda v: 0 if v < 20 else v)
+        fg.putalpha(alpha)
+
+        bbox = alpha.getbbox()
+        if not bbox:
+            # fallback: just contain original on white background
+            base = Image.new("RGB", IMAGE_TARGET_SIZE, (255, 255, 255))
+            with Image.open(raw_path) as im2:
+                im2 = ImageOps.exif_transpose(im2).convert("RGB")
+                im2 = ImageOps.contain(im2, IMAGE_TARGET_SIZE)
+                x = (base.size[0] - im2.size[0]) // 2
+                y = (base.size[1] - im2.size[1]) // 2
+                base.paste(im2, (x, y))
+            out_path = _processed_path_for(raw_path)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            base.save(out_path, "JPEG", quality=90)
+            return out_path
+
+        x0, y0, x1, y1 = bbox
+        fg_cropped = fg.crop((x0, y0, x1, y1))
+        w, h = fg_cropped.size
+
+        # shadow mask (ellipse)
+        shadow_mask = Image.new("L", (w, h), 0)
+        draw = ImageDraw.Draw(shadow_mask)
+        shadow_w = int(w * 0.7)
+        shadow_h = max(6, int(h * 0.15))
+        cx = w // 2
+        sx0 = max(0, cx - shadow_w // 2)
+        sx1 = min(w, cx + shadow_w // 2)
+        sy0 = max(0, h - shadow_h - 1)
+        sy1 = h
+        draw.ellipse([sx0, sy0, sx1, sy1], fill=255)
+        shadow_mask = shadow_mask.filter(ImageFilter.GaussianBlur(12))
+        shadow_mask = shadow_mask.point(lambda a: int(a * (90 / 255.0)))
+
+        shadow_rgba = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        shadow_rgba.paste((0, 0, 0, 255), mask=shadow_mask)
+
+        base_rgba = Image.new("RGBA", (w, h), (255, 255, 255, 255))
+        base_rgba.paste(shadow_rgba, (0, 0), shadow_rgba)
+        base_rgba.paste(fg_cropped, (0, 0), fg_cropped)
+
+        result = base_rgba.convert("RGB")
+        result = ImageOps.contain(result, IMAGE_TARGET_SIZE)
+
+        final = Image.new("RGB", IMAGE_TARGET_SIZE, (255, 255, 255))
+        ox = (IMAGE_TARGET_SIZE[0] - result.size[0]) // 2
+        oy = (IMAGE_TARGET_SIZE[1] - result.size[1]) // 2
+        final.paste(result, (ox, oy))
+
+        out_path = _processed_path_for(raw_path)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        final.save(out_path, "JPEG", quality=90)
+        return out_path
+    except Exception as e:
+        print("[IMG-OPT] Fehler:", e)
+        return None
+
+def _prefer_processed_path(raw_path: Path) -> Path:
+    try:
+        out = _processed_path_for(raw_path)
+        return out if out.exists() else raw_path
+    except Exception:
+        return raw_path
+
+def _run_image_optimize_background(artikelnr: str, raw_path: Path, clothing3d: bool = False) -> None:
+    try:
+        lk = _img_lock(raw_path.name)
+        with lk:
+            if _processed_exists_newer(raw_path):
+                return
+            if clothing3d:
+                _optimize_image_clothing3d_low(raw_path)
+            else:
+                _optimize_image_like_desktop(raw_path)
+    except Exception:
+        return
 
 
 # ----------------------------
@@ -1648,6 +1781,7 @@ def check_artnr(artikelnr: str):
 async def upload(
     file: UploadFile = File(...),
     artikelnr: str = Form(...),
+    clothing3d: int = Form(0),
     background_tasks: BackgroundTasks = None,
 ):
     artikelnr = str(artikelnr).strip()
@@ -1668,6 +1802,10 @@ async def upload(
     out = _next_image_path(artikelnr)
     out.parent.mkdir(parents=True, exist_ok=True)
     img.save(out, "JPEG", quality=78)
+
+    # Hintergrund: Bilder optimieren (Freistellen + Schatten + 750x750), blockiert Upload NICHT
+    if background_tasks:
+        background_tasks.add_task(_run_image_optimize_background, artikelnr, out)
 
     # set pending, damit Polling NICHT bei altem realtime sofort stoppt
     mj = _load_meta_json(artikelnr)
@@ -1695,7 +1833,8 @@ def images(artikelnr: str):
 
     files = []
     for f in _list_image_paths(artikelnr):
-        rel = f.relative_to(BASE_DIR)
+        best = _prefer_processed_path(f)
+        rel = best.relative_to(BASE_DIR)
         files.append("/static/" + str(rel).replace("\\", "/"))
 
     # cover-first ordering

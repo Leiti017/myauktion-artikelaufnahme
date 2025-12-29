@@ -2,7 +2,6 @@ fastapi
 uvicorn
 python-multipart
 pillow
-
-# Background removal (Freistellen)
+requests
 rembg
 onnxruntime
