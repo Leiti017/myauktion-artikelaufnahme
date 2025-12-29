@@ -1499,7 +1499,7 @@ def export_csv(from_nr: str | None = None, to_nr: str | None = None, sortiment_i
                 sortiment_id = str(s.get("id"))
                 break
 
-    rows = []
+    rows: list[dict] = []
     for jf in sorted(RAW_DIR.glob("*.json")):
         art = jf.stem
         if not _in_range(art):
@@ -1508,28 +1508,31 @@ def export_csv(from_nr: str | None = None, to_nr: str | None = None, sortiment_i
         if sortiment_id:
             if str(meta.get("sortiment_id") or "").strip() != str(sortiment_id).strip():
                 continue
-        rows.append([
-            art,
-            str(int(meta.get("menge") or 1)),
-            str(meta.get("titel") or ""),
-            str(meta.get("beschreibung") or ""),
-            _format_rufpreis(meta.get("rufpreis", 0)),
-            str(meta.get("lagerort") or ""),
-            str(int(meta.get("lagerstand") or 1)),
-            str(int(meta.get("uebernehmen") or 1)),
-            str(meta.get("einlieferer_id") or meta.get("einlieferer") or ""),
-            str(meta.get("angeliefert") or ""),
-            str(meta.get("betriebsmittel") or ""),
-            str(meta.get("mitarbeiter") or ""),
-        ])
+
+        # WICHTIG: Immer per Feldname mappen (nie per Reihenfolge), sonst verschieben sich Spalten.
+        rows.append({
+            "ArtikelNr": art,
+            "Bezeichnung": str(meta.get("titel", "") or ""),
+            "Beschreibung": str(meta.get("beschreibung", "") or ""),
+            "Menge": int(meta.get("menge", 1) or 1),
+            "Preis": _format_rufpreis(meta.get("rufpreis", 0.0) or 0.0),
+            "Ladenpreis": _format_ladenpreis(meta.get("retail_price", 0) or 0),
+            "Lagerort": str(meta.get("lagerort", "") or ""),
+            "Lagerstand": int(meta.get("lagerstand", 1) or 1),
+            "Uebernehmen": int(meta.get("uebernehmen", 1) or 1),
+            "Sortiment": str(meta.get("sortiment_id") or meta.get("sortiment") or ""),
+            "Einlieferer-ID": str(meta.get("einlieferer_id", meta.get("einlieferer", "")) or ""),
+            "Angeliefert": str(meta.get("angeliefert", "") or ""),
+            "Betriebsmittel": str(meta.get("betriebsmittel", "") or ""),
+            "Mitarbeiter": str(meta.get("mitarbeiter", "") or ""),
+        })
 
     bio = io.StringIO()
-    w = csv.writer(bio, delimiter=";", quotechar='"', quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
-    w.writerow(CSV_HEADERS)
+    w = csv.DictWriter(bio, fieldnames=CSV_FIELDS, delimiter=";", lineterminator="\n")
+    w.writeheader()
     for r in rows:
-        w.writerow(r)
-    content = ("\ufeff" + bio.getvalue()).encode("utf-8")
-    return Response(content, media_type="text/csv", headers={"Content-Disposition":"attachment; filename=artikel_export.csv"})
+        w.writerow({k: r.get(k, "") for k in CSV_FIELDS})
+
 
 
 # ----------------------------
