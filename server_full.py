@@ -611,8 +611,9 @@ def _gdrive_backup_article(artikelnr: str) -> None:
         # Backup darf nie das Speichern blockieren
         return
 def _gdrive_list_files(token: str, folder_id: str) -> list[dict]:
+    """List files in a Drive folder."""
     files: list[dict] = []
-    page_token = None
+    page_token: str | None = None
     while True:
         params = {
             "q": f"'{folder_id}' in parents and trashed=false",
@@ -621,7 +622,12 @@ def _gdrive_list_files(token: str, folder_id: str) -> list[dict]:
         }
         if page_token:
             params["pageToken"] = page_token
-        r = requests.get("https://www.googleapis.com/drive/v3/files", headers=_gdrive_headers(token), params=params, timeout=60)
+        r = requests.get(
+            "https://www.googleapis.com/drive/v3/files",
+            headers=_gdrive_headers(token),
+            params=params,
+            timeout=60,
+        )
         r.raise_for_status()
         j = r.json()
         files.extend(j.get("files", []) or [])
@@ -630,12 +636,30 @@ def _gdrive_list_files(token: str, folder_id: str) -> list[dict]:
             break
     return files
 
-def _gdrive_download_file(token: str, file_id: str) -> bytes:
-    r = requests.get(f"https://www.googleapis.com/drive/v3/files/{file_id}", headers=_gdrive_headers(token), params={"alt":"media"}, timeout=120)
+def _gdrive_download_file(token: str, file_id: str, mime_type: str | None = None) -> bytes:
+    """Download a file. If it's a Google Workspace file (e.g. Sheets), export as CSV."""
+    if mime_type and mime_type.startswith("application/vnd.google-apps."):
+        # export to CSV (works for spreadsheets)
+        r = requests.get(
+            f"https://www.googleapis.com/drive/v3/files/{file_id}/export",
+            headers=_gdrive_headers(token),
+            params={"mimeType": "text/csv"},
+            timeout=120,
+        )
+        r.raise_for_status()
+        return r.content
+
+    r = requests.get(
+        f"https://www.googleapis.com/drive/v3/files/{file_id}",
+        headers=_gdrive_headers(token),
+        params={"alt": "media"},
+        timeout=120,
+    )
     r.raise_for_status()
     return r.content
 
 def _gdrive_restore_all() -> dict:
+() -> dict:
     """Restore RAW_DIR + export CSV from Google Drive (best effort).
     Supports folders containing only CSV + JPG (rebuild JSON from CSV afterwards).
     """
@@ -660,14 +684,14 @@ def _gdrive_restore_all() -> dict:
             if name.lower().endswith(".json"):
                 out = RAW_DIR / name
                 if not out.exists():
-                    out.write_bytes(_gdrive_download_file(token, fid))
+                    out.write_bytes(_gdrive_download_file(token, fid, str(f.get('mimeType') or '')))
                     restored_json += 1
                 continue
 
             if name.lower().endswith(".jpg"):
                 out = RAW_DIR / name
                 if not out.exists():
-                    out.write_bytes(_gdrive_download_file(token, fid))
+                    out.write_bytes(_gdrive_download_file(token, fid, str(f.get('mimeType') or '')))
                     restored_jpg += 1
                 continue
 
@@ -687,7 +711,7 @@ def _gdrive_restore_all() -> dict:
                     return str(x.get("modifiedTime") or "")
                 csv_candidates.sort(key=_mtime_key, reverse=True)
                 best = csv_candidates[0]
-                EXPORT_CSV.write_bytes(_gdrive_download_file(token, str(best.get("id"))))
+                EXPORT_CSV.write_bytes(_gdrive_download_file(token, str(best.get("id")), str(best.get("mimeType") or ""))
                 restored_csv = 1
 
         # ensure local export exists and consistent
