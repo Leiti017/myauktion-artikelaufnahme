@@ -10,12 +10,12 @@
 # - Live-Check Artikelnummer: /api/check_artnr
 # - Foto löschen: /api/delete_image
 # - CSV Export (inkl. Kategorie)
-# - Admin-Only Admin-Flags (Token geschützt): /api/admin/articles
+# - Admin-Only Budget/Flags (Token geschützt): /api/admin/budget /api/admin/articles
 #
 # Start:
 #   python -m uvicorn server_full:app --host 0.0.0.0 --port 5050
 from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, Request, Response
-from fastapi.responses import JSONResponse, FileResponse, RedirectResponse
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import requests
@@ -34,8 +34,8 @@ def _normalize_title(title: str) -> str:
     return t
 
 from pathlib import Path
-from PIL import Image, ImageOps
-import io, json, time, csv, math, os, datetime, zipfile, hashlib, threading, random
+from PIL import Image, ImageOps, ImageFilter, ImageDraw
+import io, json, time, csv, math, os, datetime, zipfile, hashlib, threading, random, base64
 import re
 from typing import Any, Dict, Optional, Tuple
 
@@ -73,6 +73,20 @@ PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 EXPORT_CSV = EXPORT_DIR / "artikel_export.csv"
+
+# ----------------------------
+# Bild-Optimierung (Freistellen) – wie Desktop-Version
+# - Standard: rembg (u2net) + Bodenschatten + 750x750 auf weiß
+# - Optional: Bekleidung 3D (OpenAI Images Edits) – nur wenn im Upload aktiviert
+# ----------------------------
+REMBG_AVAILABLE = False
+REMBG_SESSION = None
+try:
+    from rembg import new_session, remove  # type: ignore
+    REMBG_SESSION = new_session("u2net")
+    REMBG_AVAILABLE = True
+except Exception:
+    REMBG_AVAILABLE = False
 
 
 # ----------------------------
@@ -978,6 +992,189 @@ def _default_meta(artikelnr: str) -> Dict[str, Any]:
     }
 
 
+
+
+def _processed_path_for(raw_path: Path) -> Path:
+    return PROCESSED_DIR / raw_path.name
+
+
+def _list_best_image_paths(artikelnr: str) -> list[Path]:
+    """List images for an article, preferring processed versions when available."""
+    raw = _list_image_paths(artikelnr, RAW_DIR)
+    best: list[Path] = []
+    for rp in raw:
+        pp = _processed_path_for(rp)
+        best.append(pp if pp.exists() else rp)
+    # If no raw exists but processed exists (edge case), return processed
+    if not best:
+        proc = _list_image_paths(artikelnr, PROCESSED_DIR)
+        best = proc
+    return best
+
+
+def _add_contact_shadow(fg_rgba: Image.Image) -> Image.Image:
+    """Adds a soft contact shadow under the foreground (expects cropped RGBA)."""
+    w, h = fg_rgba.size
+    shadow_mask = Image.new("L", (w, h), 0)
+    draw = ImageDraw.Draw(shadow_mask)
+
+    shadow_w = int(w * 0.7)
+    shadow_h = max(6, int(h * 0.15))
+    cx = w // 2
+
+    sx0 = max(0, cx - shadow_w // 2)
+    sx1 = min(w, cx + shadow_w // 2)
+    sy0 = max(0, h - shadow_h - 1)
+    sy1 = h
+
+    draw.ellipse([sx0, sy0, sx1, sy1], fill=255)
+
+    shadow_mask = shadow_mask.filter(ImageFilter.GaussianBlur(12))
+    shadow_mask = shadow_mask.point(lambda a: int(a * (90 / 255.0)))
+
+    shadow_rgba = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    shadow_rgba.paste((0, 0, 0, 255), mask=shadow_mask)
+
+    base_rgba = Image.new("RGBA", (w, h), (255, 255, 255, 255))
+    base_rgba.paste(shadow_rgba, (0, 0), shadow_rgba)
+    base_rgba.paste(fg_rgba, (0, 0), fg_rgba)
+    return base_rgba
+
+
+def _process_single_image_rembg(raw_path: Path, out_path: Path) -> bool:
+    """Freistellen + Schatten + 750x750 JPEG. Returns True if processed."""
+    if not REMBG_AVAILABLE or not REMBG_SESSION:
+        return False
+
+    try:
+        with Image.open(raw_path) as im:
+            im = ImageOps.exif_transpose(im).convert("RGBA")
+            buf = io.BytesIO()
+            im.save(buf, format="PNG")
+            buf.seek(0)
+            cut = remove(buf.read(), session=REMBG_SESSION)  # type: ignore
+            fg = Image.open(io.BytesIO(cut)).convert("RGBA")
+
+        alpha = fg.split()[-1]
+        alpha = alpha.point(lambda v: 0 if v < 20 else v)
+        fg.putalpha(alpha)
+
+        bbox = alpha.getbbox()
+        target_w, target_h = 750, 750
+        if not bbox:
+            base = Image.new("RGB", (target_w, target_h), (255, 255, 255))
+            with Image.open(raw_path) as im2:
+                im2 = ImageOps.exif_transpose(im2).convert("RGB")
+                im2 = ImageOps.contain(im2, (target_w, target_h))
+                x = (target_w - im2.size[0]) // 2
+                y = (target_h - im2.size[1]) // 2
+                base.paste(im2, (x, y))
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            base.save(out_path, "JPEG", quality=90)
+            return True
+
+        x0, y0, x1, y1 = bbox
+        fg_cropped = fg.crop((x0, y0, x1, y1))
+
+        composed = _add_contact_shadow(fg_cropped).convert("RGB")
+
+        composed = ImageOps.contain(composed, (target_w, target_h))
+        final = Image.new("RGB", (target_w, target_h), (255, 255, 255))
+        ox = (target_w - composed.size[0]) // 2
+        oy = (target_h - composed.size[1]) // 2
+        final.paste(composed, (ox, oy))
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        final.save(out_path, "JPEG", quality=90)
+        return True
+    except Exception:
+        return False
+
+
+def _openai_edit_garment_3d_low(cutout_rgba: Image.Image, api_key: str) -> Image.Image:
+    """OpenAI Images Edits – LOW. Returns PIL Image (RGB)."""
+    buf = io.BytesIO()
+    cutout_rgba.save(buf, format="PNG")
+    buf.seek(0)
+
+    prompt = (
+        "Create a realistic studio product photo of this garment. "
+        "Make it look filled and properly shaped like on an invisible mannequin. "
+        "Clean white background, accurate colors, natural fabric texture. "
+        "Add a soft contact shadow under the garment. No text, no watermark."
+    )
+
+    url = "https://api.openai.com/v1/images/edits"
+    headers = {"Authorization": f"Bearer {api_key}"}
+    files = [("image[]", ("garment.png", buf.getvalue(), "image/png"))]
+    data = {
+        "model": "gpt-image-1",
+        "prompt": prompt,
+        "size": "1024x1024",
+        "quality": "low",
+        "background": "opaque",
+        "output_format": "jpeg",
+        "output_compression": "90",
+        "n": "1",
+    }
+
+    r = requests.post(url, headers=headers, files=files, data=data, timeout=180)
+    r.raise_for_status()
+    payload = r.json()
+    b64 = payload["data"][0]["b64_json"]
+    img_bytes = base64.b64decode(b64)
+    return Image.open(io.BytesIO(img_bytes)).convert("RGB")
+
+
+def _process_single_image_clothing3d(raw_path: Path, out_path: Path) -> bool:
+    """Bekleidung 3D: rembg cutout -> OpenAI edit -> 750x750 -> save."""
+    if not REMBG_AVAILABLE or not REMBG_SESSION:
+        return False
+    api_key = (os.environ.get("OPENAI_API_KEY", "") or "").strip()
+    if not api_key:
+        return False
+
+    try:
+        with Image.open(raw_path) as im:
+            im = ImageOps.exif_transpose(im).convert("RGBA")
+            buf = io.BytesIO()
+            im.save(buf, format="PNG")
+            buf.seek(0)
+            cut = remove(buf.read(), session=REMBG_SESSION)  # type: ignore
+            fg = Image.open(io.BytesIO(cut)).convert("RGBA")
+
+        alpha = fg.split()[-1].point(lambda v: 0 if v < 15 else v)
+        fg.putalpha(alpha)
+
+        out = _openai_edit_garment_3d_low(fg, api_key)
+
+        target_w, target_h = 750, 750
+        out = ImageOps.contain(out, (target_w, target_h))
+        final = Image.new("RGB", (target_w, target_h), (255, 255, 255))
+        ox = (target_w - out.size[0]) // 2
+        oy = (target_h - out.size[1]) // 2
+        final.paste(out, (ox, oy))
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        final.save(out_path, "JPEG", quality=90)
+        return True
+    except Exception:
+        return False
+
+
+def _run_image_background(artikelnr: str, raw_path: Path, clothing3d: bool = False):
+    """Runs in background after upload. Produces processed image without blocking UI."""
+    try:
+        out_path = _processed_path_for(raw_path)
+        if clothing3d:
+            ok = _process_single_image_clothing3d(raw_path, out_path)
+            if not ok:
+                _process_single_image_rembg(raw_path, out_path)
+        else:
+            _process_single_image_rembg(raw_path, out_path)
+    except Exception:
+        pass
+
 def _meta_path(artikelnr: str) -> Path:
     return RAW_DIR / f"{artikelnr}.json"
 
@@ -1323,7 +1520,7 @@ def _list_articles() -> list[dict]:
         created = int(mj.get("created_at", 0) or 0)
         updated = int(mj.get("updated_at", 0) or 0)
 
-        pics = _list_image_paths(nr)
+        pics = _list_best_image_paths(nr)
         img_url = ""
         if pics:
             rel = pics[-1].relative_to(BASE_DIR)
@@ -1363,8 +1560,7 @@ def admin_root():
 
 @app.get("/articles")
 def articles_page():
-    # Gesamtartikel ist jetzt im Admin integriert
-    return RedirectResponse(url="/admin", status_code=302)
+    return FileResponse(str(BASE_DIR / "articles.html"))
 
 
 @app.api_route("/api/health", methods=["GET","HEAD"])
@@ -1581,7 +1777,7 @@ def _in_range_art(n: str, from_nr: str | None, to_nr: str | None) -> bool:
 @app.get("/api/images.zip")
 @app.get("/api/export_images.zip")
 @app.get("/api/bilder.zip")
-def export_images_zip(request: Request, from_nr: str | None = None, to_nr: str | None = None, sortiment_id: str | None = None, sortiment_name: str | None = None):
+def export_images_zip(request: Request, from_nr: str | None = None, to_nr: str | None = None, sortiment_id: str | None = None, sortiment_name: str | None = None, mode: str | None = None):
     """ZIP mit allen Bildern (RAW) für Artikel (optional Von/Bis ArtikelNr).
     Admin-Token geschützt (X-Admin-Token oder ?token=...).
     """
@@ -1610,9 +1806,14 @@ def export_images_zip(request: Request, from_nr: str | None = None, to_nr: str |
                     if str(meta.get("sortiment_id") or "").strip() != str(sortiment_id).strip():
                         continue
                 for p in _images_for_art(art):
+                    use_p = p
+                    if (mode or '').lower() in ('processed','optimiert','optimized','opt'):
+                        pp = PROCESSED_DIR / p.name
+                        if pp.exists():
+                            use_p = pp
                     try:
                         # in zip nur Dateiname, weil schon eindeutig (ART...jpg)
-                        z.writestr(p.name, p.read_bytes())
+                        z.writestr(use_p.name, use_p.read_bytes())
                     except Exception:
                         pass
 
@@ -1620,7 +1821,7 @@ def export_images_zip(request: Request, from_nr: str | None = None, to_nr: str |
     return Response(
         content,
         media_type="application/zip",
-        headers={"Content-Disposition": "attachment; filename=artikel_bilder.zip"},
+        headers={"Content-Disposition": "attachment; filename=artikel_bilder_optimiert.zip" if (mode or "").lower() in ("processed","optimiert","optimized","opt") else "attachment; filename=artikel_bilder.zip"},
     )
 
 
@@ -1648,6 +1849,7 @@ def check_artnr(artikelnr: str):
 async def upload(
     file: UploadFile = File(...),
     artikelnr: str = Form(...),
+    clothing3d: str = Form("0"),
     background_tasks: BackgroundTasks = None,
 ):
     artikelnr = str(artikelnr).strip()
@@ -1681,6 +1883,9 @@ async def upload(
 
     if background_tasks:
         background_tasks.add_task(_run_meta_background, artikelnr, out)
+        # Bilder freistellen läuft getrennt im Hintergrund (kein Warten im Frontend)
+        c3d = str(clothing3d).strip() in ("1","true","True","yes","on")
+        background_tasks.add_task(_run_image_background, artikelnr, out, c3d)
 
     return {"ok": True, "filename": out.name}
 
@@ -1694,7 +1899,7 @@ def images(artikelnr: str):
     cover = str(meta.get("cover") or "").strip()
 
     files = []
-    for f in _list_image_paths(artikelnr):
+    for f in _list_best_image_paths(artikelnr):
         rel = f.relative_to(BASE_DIR)
         files.append("/static/" + str(rel).replace("\\", "/"))
 
@@ -1815,7 +2020,7 @@ def delete_image(payload: Dict[str, Any]):
 
     # meta updaten: last_image + cover korrekt setzen
     mj = _load_meta_json(artikelnr)
-    pics = _list_image_paths(artikelnr)
+    pics = _list_best_image_paths(artikelnr)
 
     mj["last_image"] = pics[-1].name if pics else ""
 
@@ -1837,7 +2042,7 @@ def meta(artikelnr: str):
     _migrate_bad_suffixes(artikelnr)
     mj = _load_meta_json(artikelnr)
 
-    pics = _list_image_paths(artikelnr)
+    pics = _list_best_image_paths(artikelnr)
     img_url = ""
     if pics:
         rel = pics[-1].relative_to(BASE_DIR)
@@ -1855,6 +2060,7 @@ def meta(artikelnr: str):
         "sortiment": mj.get("sortiment", "") or "",
         "einlieferer": mj.get("einlieferer", "") or "",
         "mitarbeiter": mj.get("mitarbeiter", "") or "",
+        "angeliefert": mj.get("angeliefert", "") or "",
         "reviewed": bool(mj.get("reviewed", False)),
         "ki_source": mj.get("ki_source", "") or "",
         "ki_last_error": mj.get("ki_last_error", "") or "",
@@ -1887,7 +2093,7 @@ def save(data: Dict[str, Any]):
 
 
     # Textfelder
-    for k in ["titel", "beschreibung", "lagerort", "einlieferer", "mitarbeiter", "kategorie"]:
+    for k in ["titel", "beschreibung", "lagerort", "einlieferer", "mitarbeiter", "kategorie", "angeliefert"]:
         if k in data and data[k] is not None:
             mj[k] = str(data[k])
 
@@ -1965,7 +2171,7 @@ def describe(artikelnr: str):
     artikelnr = str(artikelnr).strip()
     _migrate_legacy_zero(artikelnr)
     _migrate_bad_suffixes(artikelnr)
-    pics = _list_image_paths(artikelnr)
+    pics = _list_best_image_paths(artikelnr)
     if not pics:
         return JSONResponse({"ok": False, "error": "Kein Bild für diese Artikelnummer gefunden."}, status_code=400)
 
@@ -2130,6 +2336,30 @@ def admin_sortimente_delete(request: Request, data: Dict[str, Any]):
     return {"ok": True, "items": _load_sortimente()}
 
 
+@app.get("/api/admin/budget")
+def admin_budget(request: Request):
+    guard = _admin_guard(request)
+    if guard:
+        return guard
+
+    u = _load_usage()
+    budget = float(u.get("budget_eur", DEFAULT_BUDGET_EUR))
+    spent = float(u.get("spent_est_eur", 0.0))
+    remaining = round(max(budget - spent, 0.0), 4)
+
+    return {
+        "ok": True,
+        "budget_eur": budget,
+        "spent_est_eur": spent,
+        "remaining_est_eur": remaining,
+        "success_calls": int(u.get("success_calls", 0)),
+        "failed_calls": int(u.get("failed_calls", 0)),
+        "cost_per_success_call_eur": float(u.get("cost_per_success_call_eur", COST_PER_SUCCESS_CALL_EUR)),
+        "last_success_at": int(u.get("last_success_at", 0)),
+        "last_error": u.get("last_error", "") or "",
+    }
+
+
 @app.get("/api/admin/articles")
 def admin_articles(request: Request, sortiment: str = "", sortiment_id: str = "", only_failed: int = 0):
     guard = _admin_guard(request)
@@ -2159,7 +2389,7 @@ def admin_articles(request: Request, sortiment: str = "", sortiment_id: str = ""
         if only_failed and (mj.get("ki_source") != "failed"):
             continue
 
-        pics = _list_image_paths(nr)
+        pics = _list_best_image_paths(nr)
         img_url = ""
         if pics:
             rel = pics[-1].relative_to(BASE_DIR)
@@ -2195,10 +2425,5 @@ def admin_articles(request: Request, sortiment: str = "", sortiment_id: str = ""
 if __name__ == "__main__":
     import os
     import uvicorn
-
-    # Render setzt PORT; fallback 10000 für lokal
     port = int(os.environ.get("PORT", "10000"))
-    print(f"[BOOT] Starting Uvicorn on 0.0.0.0:{port}", flush=True)
-
-    # Wichtig: direkt das app-Objekt starten (robuster auf Render als Import-String)
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+    uvicorn.run("server_full:app", host="0.0.0.0", port=port)

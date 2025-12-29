@@ -81,7 +81,7 @@
         <div class="text-xs md:text-sm text-white/80">BEI UNS BESTIMMST DU DEN PREIS!</div>
       </div>
     </div>
-    <div class="flex items-center gap-4 text-sm opacity-90"><a href="/admin" class="underline">Admin</a></div>
+    <div class="flex items-center gap-4 text-sm opacity-90"><a href="/admin" class="underline">Admin</a> </div>
   </header>
 
   <main class="glass rounded-3xl p-4 md:p-6 shadow-xl">
@@ -142,11 +142,14 @@
               <label class="block mb-1 text-xs opacity-80">Betriebsmittel</label>
               <input id="s-betriebsmittel" type="text" class="input" placeholder="Rollwagen X…">
             </div>
+          </div>
 
-            <div class="sm:col-span-2 flex items-center gap-2 mt-1">
-              <input id="s-clothing3d" type="checkbox" class="h-4 w-4">
-              <label for="s-clothing3d" class="text-xs opacity-90 select-none">👕 Bekleidung 3D (OpenAI, optional) – nur aktivieren bei Kleidung</label>
-            </div>
+          
+          <div class="sm:col-span-2 flex items-center gap-2 mt-1">
+            <input id="s-clothing3d" type="checkbox" class="h-4 w-4 accent-white/80">
+            <label for="s-clothing3d" class="text-xs opacity-85">
+              Bekleidung: 3D-Freistellen (Beta, optional – braucht OpenAI API-Key)
+            </label>
           </div>
 
           <div class="flex justify-end mt-3">
@@ -360,10 +363,10 @@ const btnDeleteArticle = document.getElementById('btn-delete-article');
   const sEinl = document.getElementById('s-einlieferer-id');
   const sMit  = document.getElementById('s-mitarbeiter');
   const sLagerstand = document.getElementById('s-lagerstand');
+  const sClothing3d = document.getElementById('s-clothing3d');
   const sUebernehmen = document.getElementById('s-uebernehmen');
   const sAngeliefert = document.getElementById('s-angeliefert');
   const sBetriebsmittel = document.getElementById('s-betriebsmittel');
-  const sClothing3d = document.getElementById('s-clothing3d');
   const sSortiment = document.getElementById('s-sortiment');
   const btnSettingsSave = document.getElementById('btn-settings-save');
 
@@ -381,8 +384,7 @@ const btnDeleteArticle = document.getElementById('btn-delete-article');
         betriebsmittel: "",
         sortiment: "",
         price_system_enabled: true,
-        hide_listprice: false,
-        clothing3d_enabled: false
+        hide_listprice: false
       }, d || {});
     }catch(e){
       return {
@@ -395,8 +397,7 @@ const btnDeleteArticle = document.getElementById('btn-delete-article');
         betriebsmittel:"",
         sortiment:"",
         price_system_enabled:true,
-        hide_listprice:false,
-        clothing3d_enabled:false
+        hide_listprice:false
       };
     }
   }
@@ -413,7 +414,6 @@ const btnDeleteArticle = document.getElementById('btn-delete-article');
     if(s.betriebsmittel) parts.push("BM: " + s.betriebsmittel);
     if(s.sortiment) parts.push("Sort: " + s.sortiment);
     parts.push((s.price_system_enabled===false) ? "Preis: AUS" : "Preis: AN");
-    parts.push((s.clothing3d_enabled===true) ? "3D: AN" : "3D: AUS");
     return parts.join(" · ");
   }
 
@@ -426,7 +426,6 @@ const btnDeleteArticle = document.getElementById('btn-delete-article');
     sAngeliefert.value = s.angeliefert || "";
     sBetriebsmittel.value = s.betriebsmittel || "";
     if(sSortiment) sSortiment.value = s.sortiment || "";
-    if(sClothing3d) sClothing3d.checked = (s.clothing3d_enabled === true);
     settingsMini.textContent = "Einstellungen: " + settingsText(s);
     // Main-Feld Menge übernehmen
     try{ fMenge.value = String(s.menge ?? 1); }catch(e){}
@@ -436,7 +435,7 @@ const btnDeleteArticle = document.getElementById('btn-delete-article');
     const prev = loadSettings();
     // WICHTIG: Preis-Flags dürfen NICHT verloren gehen, sonst „springen“ die Buttons zurück.
     return {
-      prev,
+      ...prev,
       einlieferer_id: (sEinl.value||"").trim(),
       mitarbeiter: (sMit.value||"").trim(),
       menge: parseInt((fMenge?.value)||"1",10) || 1,
@@ -448,8 +447,7 @@ const btnDeleteArticle = document.getElementById('btn-delete-article');
       // preserve flags explicitly (falls prev unvollständig ist)
       price_system_enabled: (prev.price_system_enabled !== false),
       hide_listprice: (prev.hide_listprice === true),
-      clothing3d_enabled: (sClothing3d ? !!sClothing3d.checked : (prev.clothing3d_enabled === true)),
-      clothing3d_enabled: (sClothing3d ? !!sClothing3d.checked : (prev.clothing3d_enabled === true))
+      clothing3d: !!(sClothing3d && sClothing3d.checked)
     };
   }
 
@@ -593,7 +591,7 @@ async function refreshRecent(){
         thumb.innerHTML = `<img src="${url}">`;
 
         // UI highlight
-        [imgStrip.querySelectorAll('img')].forEach(el=> el.style.outline = "");
+        [...imgStrip.querySelectorAll('img')].forEach(el=> el.style.outline = "");
         img.style.outline = "2px solid rgba(255,255,255,.85)";
 
         if(btnSetCover){
@@ -639,23 +637,6 @@ async function refreshRecent(){
     fRetail.value = (j.retail_price ?? "");
     fRuf.value    = (j.rufpreis ?? "");
     applyPriceMode();
-
-    // Lagerort/Angeliefert im Bearbeiten-Modus nachladen
-    try{
-      if(typeof j.lagerort !== "undefined"){
-        if(__EDIT_MODE || !(fLager.value||"").trim()){
-          if(j.lagerort) fLager.value = j.lagerort || "";
-        }
-      }
-      if(__EDIT_MODE){
-        if(typeof j.angeliefert !== "undefined" && j.angeliefert){
-          const s = loadSettings();
-          s.angeliefert = __toISODate(j.angeliefert);
-          saveSettings(s);
-          applySettingsToUI();
-        }
-      }
-    }catch(e){}
 
     if(j.image){
       thumb.innerHTML = `<img src="${j.image}">`;
@@ -788,10 +769,7 @@ async function refreshRecent(){
     const fd = new FormData();
     fd.append('file', file);
     fd.append('artikelnr', art);
-  try{
-    const s = loadSettings();
-    fd.append('clothing3d', (s && s.clothing3d_enabled) ? '1' : '0');
-  }catch(e){ fd.append('clothing3d','0'); }
+    try{ const s = loadSettings(); fd.append('clothing3d', s.clothing3d ? '1':'0'); }catch(e){}
 
     toast("Upload startet …");
     setPill(true, "Upload …");
@@ -976,25 +954,6 @@ btnSave.onclick = async ()=>{
 };
 
   window.addEventListener('DOMContentLoaded', ()=>{
-    // Edit-Modus wenn ?edit=ARTIKELNR gesetzt ist
-    const __EDIT_ID = (new URLSearchParams(window.location.search).get('edit') || '').trim();
-    const __EDIT_MODE = !!__EDIT_ID;
-    function __toISODate(v){
-      v = (v||'').trim();
-      if(!v) return '';
-      // akzeptiere yyyy-mm-dd direkt
-      if(/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
-      // dd.mm.yyyy -> yyyy-mm-dd
-      const m = v.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
-      if(m){
-        const dd = String(m[1]).padStart(2,'0');
-        const mm = String(m[2]).padStart(2,'0');
-        const yy = m[3];
-        return `${yy}-${mm}-${dd}`;
-      }
-      return v;
-    }
-
     // Sortiment-Liste laden (Admin verwaltet)
     async function loadSortimente(){
       try{
