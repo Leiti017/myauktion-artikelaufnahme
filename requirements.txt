@@ -1,7 +1,11 @@
-fastapi
-uvicorn
-python-multipart
-pillow
-requests
-rembg==2.0.58
-onnxruntime==1.17.3
+# Background removal (Desktop-style)
+# Use a rembg version that exists on PyPI and supports modern Python.
+rembg==2.0.69
+# CPU runtime for ONNX (required by rembg)
+onnxruntime==1.20.1
+
+# Image processing
+Pillow==10.4.0
+numpy==2.1.3
+
+# (keep whatever else your project already needs below)
