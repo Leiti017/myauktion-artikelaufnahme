@@ -75,101 +75,6 @@ EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 EXPORT_CSV = EXPORT_DIR / "artikel_export.csv"
 
 
-# --- Rebuild JSON from Export CSV (when Drive contains only CSV+JPG) ---
-import csv as _csv
-
-def _find_cover_image(artikelnr: str) -> str:
-    a = str(artikelnr).strip()
-    if not a:
-        return ""
-    p0 = RAW_DIR / f"{a}.jpg"
-    if p0.exists():
-        return p0.name
-    for i in range(1, 50):
-        pi = RAW_DIR / f"{a}_{i}.jpg"
-        if pi.exists():
-            return pi.name
-    return ""
-
-def _to_float_price(val) -> float:
-    try:
-        s = str(val or "").strip()
-        if not s:
-            return 0.0
-        s = s.replace("€", "").replace(" ", "").replace(",", ".")
-        return float(s)
-    except Exception:
-        return 0.0
-
-def _to_int(val, default=0) -> int:
-    try:
-        s = str(val or "").strip()
-        if s == "":
-            return default
-        return int(float(s))
-    except Exception:
-        return default
-
-def _detect_delimiter(sample: str) -> str:
-    return ";" if sample.count(";") >= sample.count(",") else ","
-
-def _rebuild_meta_from_export_csv_if_missing() -> Dict[str, Any]:
-    if not EXPORT_CSV.exists():
-        return {"ok": False, "error": "EXPORT_CSV missing"}
-    created = skipped = errors = 0
-    with EXPORT_CSV.open("r", encoding="utf-8-sig", newline="") as f:
-        head = f.read(4096)
-        delim = _detect_delimiter(head)
-        f.seek(0)
-        reader = _csv.DictReader(f, delimiter=delim)
-        for row in reader:
-            art = str(row.get("ArtikelNr", "") or "").strip()
-            if not art:
-                continue
-            p = RAW_DIR / f"{art}.json"
-            if p.exists():
-                skipped += 1
-                continue
-            try:
-                mj = _default_meta(art)
-                mj["titel"] = str(row.get("Bezeichnung", "") or "").strip()
-                mj["beschreibung"] = str(row.get("Beschreibung", "") or "").strip()
-                mj["lagerort"] = str(row.get("Lagerort", "") or "").strip()
-                mj["mitarbeiter"] = str(row.get("Mitarbeiter", "") or "").strip()
-                mj["rufpreis"] = _to_float_price(row.get("Preis", ""))
-                mj["retail_price"] = _to_float_price(row.get("Ladenpreis", ""))
-                mj["menge"] = _to_int(row.get("Menge", 1), 1)
-                mj["lagerstand"] = _to_int(row.get("Lagerstand", 1), 1)
-                mj["uebernehmen"] = _to_int(row.get("Uebernehmen", 1), 1)
-
-                sort_raw = str(row.get("Sortiment", "") or "").strip()
-                if sort_raw:
-                    mj["sortiment"] = sort_raw
-                    mj["sortiment_name"] = sort_raw
-                    try:
-                        mj["sortiment_id"] = int(sort_raw)
-                    except Exception:
-                        pass
-
-                mj["einlieferer_id"] = str(row.get("Einlieferer-ID", "") or "").strip()
-                mj["angeliefert"] = str(row.get("Angeliefert", "") or "").strip()
-                mj["betriebsmittel"] = str(row.get("Betriebsmittel", "") or "").strip()
-                mj["cover"] = _find_cover_image(art)
-
-                _save_meta_json(art, mj)
-                created += 1
-            except Exception:
-                errors += 1
-
-    try:
-        _ensure_export_csv_exists()
-    except Exception:
-        pass
-
-    return {"ok": True, "created": created, "skipped": skipped, "errors": errors}
-
-
-
 # ----------------------------
 # Image filename scheme + stable ordering
 # Titelbild: <artikelnr>.jpg
@@ -523,8 +428,8 @@ GDRIVE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "").strip()
 GDRIVE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "").strip()
 GDRIVE_REFRESH_TOKEN = os.getenv("GOOGLE_REFRESH_TOKEN", "").strip()
 GDRIVE_FOLDER_NAME = (os.getenv("DRIVE_FOLDER_NAME", "MyAuktion-Backups") or "MyAuktion-Backups").strip()
-GDRIVE_FOLDER_ID = os.getenv("DRIVE_FOLDER_ID", "").strip()  # optional: Drive folder id
 GDRIVE_RETENTION_DAYS = int(os.getenv("DRIVE_RETENTION_DAYS", "30") or "30")
+GDRIVE_FOLDER_ID = (os.getenv("DRIVE_FOLDER_ID", "") or "").strip()
 
 _gdrive_cache = {"folder_id": None, "name_to_id": {}, "last_cleanup": None}
 
@@ -572,20 +477,13 @@ def _gdrive_create_folder(token: str, name: str) -> str:
     r.raise_for_status()
     return r.json()["id"]
 
-
-
 def _gdrive_get_folder_id(token: str) -> str:
-    """Return Drive folder id to use. Prefer explicit DRIVE_FOLDER_ID if set."""
-    if GDRIVE_FOLDER_ID:
-        return GDRIVE_FOLDER_ID
-    fid = _gdrive_find_folder(token, GDRIVE_FOLDER_NAME)
-    if fid:
-        return fid
-    return _gdrive_create_folder(token, GDRIVE_FOLDER_NAME)
-
-def _gdrive_get_folder_id(token: str) -> str:
+    # Prefer explicit folder id if provided (lets you target an existing folder reliably)
     if _gdrive_cache["folder_id"]:
         return _gdrive_cache["folder_id"]
+    if GDRIVE_FOLDER_ID:
+        _gdrive_cache["folder_id"] = GDRIVE_FOLDER_ID
+        return GDRIVE_FOLDER_ID
     fid = _gdrive_find_folder(token, GDRIVE_FOLDER_NAME)
     if not fid:
         fid = _gdrive_create_folder(token, GDRIVE_FOLDER_NAME)
@@ -738,7 +636,9 @@ def _gdrive_download_file(token: str, file_id: str) -> bytes:
     return r.content
 
 def _gdrive_restore_all() -> dict:
-    """Restore RAW_DIR + export CSV from Google Drive (best effort)."""
+    """Restore RAW_DIR + export CSV from Google Drive (best effort).
+    Supports folders containing only CSV + JPG (rebuild JSON from CSV afterwards).
+    """
     if not _gdrive_enabled():
         return {"ok": False, "error": "gdrive disabled"}
     try:
@@ -750,13 +650,13 @@ def _gdrive_restore_all() -> dict:
         restored_jpg = 0
         restored_csv = 0
 
+        # 1) Restore JSON + JPG (if present)
         for f in files:
             name = str(f.get("name") or "")
             fid = str(f.get("id") or "")
             if not name or not fid:
                 continue
 
-            # article meta
             if name.lower().endswith(".json"):
                 out = RAW_DIR / name
                 if not out.exists():
@@ -764,7 +664,6 @@ def _gdrive_restore_all() -> dict:
                     restored_json += 1
                 continue
 
-            # images
             if name.lower().endswith(".jpg"):
                 out = RAW_DIR / name
                 if not out.exists():
@@ -772,23 +671,42 @@ def _gdrive_restore_all() -> dict:
                     restored_jpg += 1
                 continue
 
-            # daily csv backups (optional restore of latest)
-            if name.startswith("artikel_export") and name.lower().endswith(".csv"):
-                # keep only the latest by name (YYYY-MM-DD)
-                # download if export not present
-                if not EXPORT_CSV.exists():
-                    EXPORT_CSV.write_bytes(_gdrive_download_file(token, fid))
-                    restored_csv += 1
+        # 2) Restore an export CSV if local missing: pick newest among artikel_export*.csv
+        if not EXPORT_CSV.exists():
+            csv_candidates = []
+            for f in files:
+                name = str(f.get("name") or "")
+                if not name:
+                    continue
+                low = name.lower()
+                if low.startswith("artikel_export") and low.endswith(".csv"):
+                    csv_candidates.append(f)
+            if csv_candidates:
+                def _mtime_key(x):
+                    # modifiedTime is RFC3339 - lexicographic sort works
+                    return str(x.get("modifiedTime") or "")
+                csv_candidates.sort(key=_mtime_key, reverse=True)
+                best = csv_candidates[0]
+                EXPORT_CSV.write_bytes(_gdrive_download_file(token, str(best.get("id"))))
+                restored_csv = 1
 
         # ensure local export exists and consistent
         _ensure_export_csv_exists()
 
-        # rebuild missing JSON from export CSV (if Drive contained only CSV+JPG)
+        # NEW: if only CSV+JPG exist, rebuild missing JSON articles from CSV
         try:
-            rebuild_res = _rebuild_meta_from_export_csv_if_missing()
+            res_rebuild = _rebuild_meta_from_export_csv_if_missing()
         except Exception as e:
-            rebuild_res = {"ok": False, "error": str(e)}
-        return {"ok": True, "restored_json": restored_json, "restored_jpg": restored_jpg, "restored_csv": restored_csv}
+            res_rebuild = {"ok": False, "error": str(e)}
+
+        return {
+            "ok": True,
+            "folder_id": folder_id,
+            "restored_json": restored_json,
+            "restored_jpg": restored_jpg,
+            "restored_csv": restored_csv,
+            "rebuild_from_csv": res_rebuild,
+        }
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -803,6 +721,26 @@ def _maybe_restore_from_gdrive_on_start():
     threading.Thread(target=_run, daemon=True).start()
 
 _maybe_restore_from_gdrive_on_start()
+
+
+@app.get("/api/gdrive_debug")
+def gdrive_debug():
+    """Debug: list files visible in the configured Drive folder."""
+    if not _gdrive_enabled():
+        return {"ok": False, "error": "gdrive disabled (missing env vars)"}
+    try:
+        token = _gdrive_access_token()
+        folder_id = _gdrive_get_folder_id(token)
+        files = _gdrive_list_files(token, folder_id)
+        names = [str(f.get("name") or "") for f in files][:30]
+        return {"ok": True, "folder_id": folder_id, "file_count": len(files), "sample_names": names}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+@app.post("/api/gdrive_restore")
+def gdrive_restore():
+    """Manual restore trigger."""
+    return _gdrive_restore_all()
 
 
 # ----------------------------
