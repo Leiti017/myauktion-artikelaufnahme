@@ -421,6 +421,172 @@ def _payload_hash(data: Dict[str, Any]) -> str:
 app.mount("/static", StaticFiles(directory=str(BASE_DIR)), name="static")
 
 
+
+# ----------------------------
+# CSV -> JSON Helpers (for restore)
+# ----------------------------
+def _to_float_price(val) -> float:
+    try:
+        s = str(val or "").strip()
+        if not s:
+            return 0.0
+        s = s.replace("€", "").replace(" ", "").replace(",", ".")
+        return float(s)
+    except Exception:
+        return 0.0
+
+def _to_int(val, default: int = 0) -> int:
+    try:
+        s = str(val or "").strip()
+        if s == "":
+            return default
+        return int(float(s))
+    except Exception:
+        return default
+
+def _find_cover_image(artikelnr: str) -> str:
+    a = str(artikelnr or "").strip()
+    if not a:
+        return ""
+    p0 = RAW_DIR / f"{a}.jpg"
+    if p0.exists():
+        return p0.name
+    for i in range(1, 50):
+        pi = RAW_DIR / f"{a}_{i}.jpg"
+        if pi.exists():
+            return pi.name
+    return ""
+# ----------------------------
+# Rebuild JSON articles from export CSV (when Drive has only CSV+JPG)
+# ----------------------------
+def _normalize_key(s: str) -> str:
+    return "".join(ch for ch in str(s or "").strip().lower() if ch.isalnum())
+
+def _csv_pick_delimiter(sample: str) -> str:
+    # Try sniffer first, then fallbacks
+    try:
+        import csv as _csv
+        return _csv.Sniffer().sniff(sample, delimiters=";,\t,|").delimiter
+    except Exception:
+        # heuristics: prefer ';' if present
+        for d in [";", ",", "\t", "|"]:
+            if d in sample:
+                return d
+        return ";"
+
+def _row_get(row: dict, *names: str) -> str:
+    # row keys already normalized
+    for n in names:
+        k=_normalize_key(n)
+        if k in row and row[k] not in (None, ""):
+            return str(row[k])
+    return ""
+
+def _rebuild_meta_from_export_csv_if_missing() -> dict:
+    """
+    Create RAW_DIR/<artikelnr>.json for rows in EXPORT_CSV if they don't exist.
+    Works even if the CSV is exported from Google Sheets.
+    """
+    if not EXPORT_CSV.exists():
+        return {"ok": False, "error": "EXPORT_CSV missing", "path": str(EXPORT_CSV)}
+
+    created = 0
+    skipped = 0
+    errors = 0
+
+    try:
+        raw = EXPORT_CSV.read_text("utf-8-sig", errors="ignore")
+    except Exception:
+        raw = EXPORT_CSV.read_text("utf-8", errors="ignore")
+
+    # detect delimiter using first lines
+    head = "\n".join(raw.splitlines()[:10])
+    delim = _csv_pick_delimiter(head)
+
+    import csv as _csv
+    reader = _csv.reader(raw.splitlines(), delimiter=delim)
+    rows = list(reader)
+    if not rows:
+        return {"ok": False, "error": "empty csv"}
+
+    headers = [ _normalize_key(h) for h in rows[0] ]
+    # build dict rows
+    for vals in rows[1:]:
+        if not any(str(v).strip() for v in vals):
+            continue
+        d = {}
+        for i,h in enumerate(headers):
+            if not h:
+                continue
+            d[h] = vals[i] if i < len(vals) else ""
+
+        art = _row_get(d, "ArtikelNr", "Artikelnr", "Artikelnummer", "Artikel Nummer", "Artikel")
+        art = str(art).strip()
+        if not art:
+            continue
+
+        p = RAW_DIR / f"{art}.json"
+        if p.exists():
+            skipped += 1
+            continue
+
+        try:
+            mj = _default_meta(art)
+
+            mj["titel"] = _row_get(d, "Bezeichnung", "Titel", "Name")
+            mj["beschreibung"] = _row_get(d, "Beschreibung", "Text")
+            mj["lagerort"] = _row_get(d, "Lagerort", "Ort", "Lager Ort")
+            mj["mitarbeiter"] = _row_get(d, "Mitarbeiter", "User", "Account")
+
+            mj["rufpreis"] = _to_float_price(_row_get(d, "Preis", "Rufpreis"))
+            mj["retail_price"] = _to_float_price(_row_get(d, "Ladenpreis", "Listenpreis", "Retail", "UVP"))
+
+            mj["menge"] = _to_int(_row_get(d, "Menge"), 1)
+            mj["lagerstand"] = _to_int(_row_get(d, "Lagerstand"), mj["menge"])
+            mj["uebernehmen"] = _to_int(_row_get(d, "Uebernehmen", "Übernehmen"), 1)
+
+            sort_raw = _row_get(d, "Sortiment", "Kategorie")
+            if sort_raw:
+                mj["sortiment"] = sort_raw
+                mj["sortiment_name"] = sort_raw
+                try:
+                    mj["sortiment_id"] = int(str(sort_raw).strip())
+                except Exception:
+                    pass
+
+            mj["einlieferer_id"] = _row_get(d, "Einlieferer-ID", "Einlieferer", "EinliefererID")
+            mj["angeliefert"] = _row_get(d, "Angeliefert")
+            mj["betriebsmittel"] = _row_get(d, "Betriebsmittel")
+
+            # timestamps: try AufnahmeDatum or Datum
+            dat = _row_get(d, "AufnahmeDatum", "Aufnahmedatum", "Datum")
+            if dat:
+                # accept DD.MM.YYYY
+                try:
+                    import datetime as _dt
+                    if "." in dat:
+                        dt=_dt.datetime.strptime(dat.strip(), "%d.%m.%Y")
+                    else:
+                        dt=_dt.datetime.strptime(dat.strip(), "%Y-%m-%d")
+                    ts=int(dt.replace(tzinfo=_dt.timezone.utc).timestamp())
+                    mj["created_at"]=ts
+                    mj["updated_at"]=ts
+                except Exception:
+                    pass
+
+            mj["cover"] = _find_cover_image(art)
+
+            _save_meta_json(art, mj)
+            created += 1
+        except Exception:
+            errors += 1
+
+    try:
+        _ensure_export_csv_exists()
+    except Exception:
+        pass
+
+    return {"ok": True, "created": created, "skipped": skipped, "errors": errors, "delimiter": delim}
 # ----------------------------
 # Google Drive Backup (Render Free, ohne Disk)
 # ----------------------------
