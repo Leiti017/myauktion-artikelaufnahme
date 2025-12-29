@@ -1465,7 +1465,7 @@ def export_csv(from_nr: str | None = None, to_nr: str | None = None, sortiment_i
     Export CSV (UTF-8 mit BOM für Excel). Optionaler Bereich:
       /api/export.csv?from_nr=123458&to_nr=123480
     """
-    _ensure_export_csv_exists()
+    _rebuild_csv_export()
 
     # Kein Filter -> Datei direkt ausliefern
     if not from_nr and not to_nr and not sortiment_id and not sortiment_name:
