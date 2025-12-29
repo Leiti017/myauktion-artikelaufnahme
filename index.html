@@ -640,6 +640,23 @@ async function refreshRecent(){
     fRuf.value    = (j.rufpreis ?? "");
     applyPriceMode();
 
+    // Lagerort/Angeliefert im Bearbeiten-Modus nachladen
+    try{
+      if(typeof j.lagerort !== "undefined"){
+        if(__EDIT_MODE || !(fLager.value||"").trim()){
+          if(j.lagerort) fLager.value = j.lagerort || "";
+        }
+      }
+      if(__EDIT_MODE){
+        if(typeof j.angeliefert !== "undefined" && j.angeliefert){
+          const s = loadSettings();
+          s.angeliefert = __toISODate(j.angeliefert);
+          saveSettings(s);
+          applySettingsToUI();
+        }
+      }
+    }catch(e){}
+
     if(j.image){
       thumb.innerHTML = `<img src="${j.image}">`;
     }
@@ -959,6 +976,25 @@ btnSave.onclick = async ()=>{
 };
 
   window.addEventListener('DOMContentLoaded', ()=>{
+    // Edit-Modus wenn ?edit=ARTIKELNR gesetzt ist
+    const __EDIT_ID = (new URLSearchParams(window.location.search).get('edit') || '').trim();
+    const __EDIT_MODE = !!__EDIT_ID;
+    function __toISODate(v){
+      v = (v||'').trim();
+      if(!v) return '';
+      // akzeptiere yyyy-mm-dd direkt
+      if(/^\d{4}-\d{2}-\d{2}$/.test(v)) return v;
+      // dd.mm.yyyy -> yyyy-mm-dd
+      const m = v.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})$/);
+      if(m){
+        const dd = String(m[1]).padStart(2,'0');
+        const mm = String(m[2]).padStart(2,'0');
+        const yy = m[3];
+        return `${yy}-${mm}-${dd}`;
+      }
+      return v;
+    }
+
     // Sortiment-Liste laden (Admin verwaltet)
     async function loadSortimente(){
       try{

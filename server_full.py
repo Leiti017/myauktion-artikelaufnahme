@@ -1335,6 +1335,7 @@ def _list_articles() -> list[dict]:
             "beschreibung": mj.get("beschreibung", "") or "",
             "sortiment": (mj.get("sortiment", "") or "").strip(),
             "lagerort": mj.get("lagerort", "") or "",
+        "angeliefert": mj.get("angeliefert", "") or "",
             "menge": int(mj.get("menge", 1) or 1),
             "rufpreis": mj.get("rufpreis", 0.0) or 0.0,
             "retail_price": mj.get("retail_price", 0.0) or 0.0,
@@ -1694,9 +1695,22 @@ def images(artikelnr: str):
     cover = str(meta.get("cover") or "").strip()
 
     files = []
-    for f in _list_image_paths(artikelnr):
-        rel = f.relative_to(BASE_DIR)
-        files.append("/static/" + str(rel).replace("\\", "/"))
+    # prefer processed images (uploads/processed) if available, fallback to raw
+    raw_paths = _list_image_paths(artikelnr, RAW_DIR)
+    used_names = set()
+    for rf in raw_paths:
+        used_names.add(rf.name)
+        pf = PROCESSED_DIR / rf.name
+        use = pf if pf.exists() else rf
+        rel = use.relative_to(BASE_DIR)
+        files.append("/static/" + str(rel).replace("\", "/"))
+
+    # also include processed-only files that have no raw counterpart (rare)
+    for pf in _list_image_paths(artikelnr, PROCESSED_DIR):
+        if pf.name in used_names:
+            continue
+        rel = pf.relative_to(BASE_DIR)
+        files.append("/static/" + str(rel).replace("\", "/"))
 
     # cover-first ordering
     if cover:
@@ -1837,7 +1851,9 @@ def meta(artikelnr: str):
     _migrate_bad_suffixes(artikelnr)
     mj = _load_meta_json(artikelnr)
 
-    pics = _list_image_paths(artikelnr)
+    pics = _list_image_paths(artikelnr, PROCESSED_DIR)
+    if not pics:
+        pics = _list_image_paths(artikelnr, RAW_DIR)
     img_url = ""
     if pics:
         rel = pics[-1].relative_to(BASE_DIR)
