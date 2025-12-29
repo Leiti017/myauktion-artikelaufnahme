@@ -3,5 +3,3 @@ uvicorn
 python-multipart
 pillow
 requests
-rembg
-onnxruntime

@@ -81,7 +81,7 @@
         <div class="text-xs md:text-sm text-white/80">BEI UNS BESTIMMST DU DEN PREIS!</div>
       </div>
     </div>
-    <div class="flex items-center gap-4 text-sm opacity-90"><a href="/admin" class="underline">Admin</a> </div>
+    <div class="flex items-center gap-4 text-sm opacity-90"><a href="/admin" class="underline">Admin</a><a href="/admin#artikel" class="underline">Artikel</a></div>
   </header>
 
   <main class="glass rounded-3xl p-4 md:p-6 shadow-xl">
@@ -142,14 +142,6 @@
               <label class="block mb-1 text-xs opacity-80">Betriebsmittel</label>
               <input id="s-betriebsmittel" type="text" class="input" placeholder="Rollwagen X…">
             </div>
-          </div>
-
-          
-          <div class="sm:col-span-2 flex items-center gap-2 mt-1">
-            <input id="s-clothing3d" type="checkbox" class="h-4 w-4 accent-white/80">
-            <label for="s-clothing3d" class="text-xs opacity-85">
-              Bekleidung: 3D-Freistellen (Beta, optional – braucht OpenAI API-Key)
-            </label>
           </div>
 
           <div class="flex justify-end mt-3">
@@ -363,7 +355,6 @@ const btnDeleteArticle = document.getElementById('btn-delete-article');
   const sEinl = document.getElementById('s-einlieferer-id');
   const sMit  = document.getElementById('s-mitarbeiter');
   const sLagerstand = document.getElementById('s-lagerstand');
-  const sClothing3d = document.getElementById('s-clothing3d');
   const sUebernehmen = document.getElementById('s-uebernehmen');
   const sAngeliefert = document.getElementById('s-angeliefert');
   const sBetriebsmittel = document.getElementById('s-betriebsmittel');
@@ -446,8 +437,7 @@ const btnDeleteArticle = document.getElementById('btn-delete-article');
       sortiment: (sSortiment ? (sSortiment.value||"").trim() : (prev.sortiment||"")),
       // preserve flags explicitly (falls prev unvollständig ist)
       price_system_enabled: (prev.price_system_enabled !== false),
-      hide_listprice: (prev.hide_listprice === true),
-      clothing3d: !!(sClothing3d && sClothing3d.checked)
+      hide_listprice: (prev.hide_listprice === true)
     };
   }
 
@@ -769,7 +759,6 @@ async function refreshRecent(){
     const fd = new FormData();
     fd.append('file', file);
     fd.append('artikelnr', art);
-    try{ const s = loadSettings(); fd.append('clothing3d', s.clothing3d ? '1':'0'); }catch(e){}
 
     toast("Upload startet …");
     setPill(true, "Upload …");
