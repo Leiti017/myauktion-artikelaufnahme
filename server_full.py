@@ -1533,6 +1533,11 @@ def export_csv(from_nr: str | None = None, to_nr: str | None = None, sortiment_i
     for r in rows:
         w.writerow({k: r.get(k, "") for k in CSV_FIELDS})
 
+    csv_text = bio.getvalue()
+    # UTF-8 BOM for Excel
+    csv_bytes = ('\ufeff' + csv_text).encode('utf-8')
+    return Response(content=csv_bytes, media_type='text/csv', headers={'Content-Disposition': 'attachment; filename=artikel_export.csv'})
+
 
 
 # ----------------------------
