@@ -10,12 +10,12 @@
 # - Live-Check Artikelnummer: /api/check_artnr
 # - Foto löschen: /api/delete_image
 # - CSV Export (inkl. Kategorie)
-# - Admin-Only Budget/Flags (Token geschützt): /api/admin/budget /api/admin/articles
+# - Admin-Only Admin-Flags (Token geschützt): /api/admin/articles
 #
 # Start:
 #   python -m uvicorn server_full:app --host 0.0.0.0 --port 5050
 from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, Request, Response
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import requests
@@ -1363,7 +1363,8 @@ def admin_root():
 
 @app.get("/articles")
 def articles_page():
-    return FileResponse(str(BASE_DIR / "articles.html"))
+    # Gesamtartikel ist jetzt im Admin integriert
+    return RedirectResponse(url="/admin", status_code=302)
 
 
 @app.api_route("/api/health", methods=["GET","HEAD"])
@@ -2127,30 +2128,6 @@ def admin_sortimente_delete(request: Request, data: Dict[str, Any]):
 
     _save_sortimente(items)
     return {"ok": True, "items": _load_sortimente()}
-
-
-@app.get("/api/admin/budget")
-def admin_budget(request: Request):
-    guard = _admin_guard(request)
-    if guard:
-        return guard
-
-    u = _load_usage()
-    budget = float(u.get("budget_eur", DEFAULT_BUDGET_EUR))
-    spent = float(u.get("spent_est_eur", 0.0))
-    remaining = round(max(budget - spent, 0.0), 4)
-
-    return {
-        "ok": True,
-        "budget_eur": budget,
-        "spent_est_eur": spent,
-        "remaining_est_eur": remaining,
-        "success_calls": int(u.get("success_calls", 0)),
-        "failed_calls": int(u.get("failed_calls", 0)),
-        "cost_per_success_call_eur": float(u.get("cost_per_success_call_eur", COST_PER_SUCCESS_CALL_EUR)),
-        "last_success_at": int(u.get("last_success_at", 0)),
-        "last_error": u.get("last_error", "") or "",
-    }
 
 
 @app.get("/api/admin/articles")

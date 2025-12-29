@@ -28,7 +28,7 @@
   <header class="flex items-center justify-between mb-6">
     <div>
       <div class="text-2xl font-extrabold">MyAuktion · Admin</div>
-      <div class="text-xs opacity-80">Budget, Flags, Überblick & CSV</div>
+      <div class="text-xs opacity-80">Export, Sortimente & Artikel</div>
     </div>
     <div class="flex gap-2">
       <a href="/" class="underline text-sm opacity-90">Zur Artikelaufnahme</a>
@@ -107,6 +107,52 @@
       </div>
       <div id="sort-list" class="mt-3"></div>
     </section>
+    <section id="artikel" class="glass rounded-3xl p-5 shadow-xl mb-5">
+      <div class="flex flex-col md:flex-row md:items-end md:justify-between gap-3">
+        <div>
+          <div class="text-lg font-bold">Artikel (Gesamtübersicht)</div>
+          <div class="text-xs opacity-80">Neueste zuerst · Filter nach Aufnahmedatum</div>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-2 w-full md:w-auto">
+          <div>
+            <label class="text-xs opacity-80">Von</label>
+            <input id="all-from" type="date" class="input">
+          </div>
+          <div>
+            <label class="text-xs opacity-80">Bis</label>
+            <input id="all-to" type="date" class="input">
+          </div>
+          <div class="flex items-end gap-2">
+            <button id="btn-all-filter" class="btn btn-primary w-full" type="button">Filtern</button>
+            <button id="btn-all-reset" class="btn btn-primary w-full" type="button">Reset</button>
+          </div>
+          <div class="flex items-end justify-end">
+            <div id="all-count" class="text-sm opacity-90">–</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="overflow-x-auto mt-4">
+        <table class="w-full text-sm">
+          <thead class="text-left opacity-90">
+            <tr>
+              <th class="py-2 pr-3">Bild</th>
+              <th class="py-2 pr-3">Datum</th>
+              <th class="py-2 pr-3">ArtikelNr</th>
+              <th class="py-2 pr-3">Sortiment</th>
+              <th class="py-2 pr-3">Bezeichnung</th>
+              <th class="py-2 pr-3">Menge</th>
+              <th class="py-2 pr-3">Rufpreis</th>
+              <th class="py-2 pr-3">Lagerort</th>
+              <th class="py-2 pr-3">Mitarbeiter</th>
+              <th class="py-2 pr-3">Bearbeiten</th>
+            </tr>
+          </thead>
+          <tbody id="all-rows" class="align-top"></tbody>
+        </table>
+      </div>
+    </section>
+
     <section class="glass rounded-3xl p-5 shadow-xl">
       <div class="flex flex-col md:flex-row md:items-end md:justify-between gap-3">
         <div>
@@ -155,55 +201,6 @@
     </section>
   </div>
 </div>
-    <section class="glass rounded-3xl p-5 shadow-xl mt-5">
-      <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-        <div>
-          <div class="text-lg font-bold">KI Budget (geschätzt)</div>
-          <div class="text-xs opacity-80">Extra geschützt: bitte Passwort erneut eingeben. Schätzung basiert auf erfolgreichen KI-Aufrufen (fixer €/Call). OpenAI-Hardlimit steuerst du im Dashboard.</div>
-        </div>
-      </div>
-
-      <div id="budget-locked" class="glass rounded-2xl p-4 mt-4">
-        <div class="text-sm font-semibold mb-2">Budget freischalten</div>
-        <div class="grid md:grid-cols-3 gap-3 items-end">
-          <div class="md:col-span-2">
-            <label class="text-xs opacity-80">Budget-Passwort</label>
-            <input id="budget-token" class="input" placeholder="Passwort erneut eingeben…">
-          </div>
-          <button id="btn-budget-unlock" class="btn btn-primary w-full">Budget anzeigen</button>
-        </div>
-      </div>
-
-      <div id="budget-content" class="hidden">
-        <div class="grid md:grid-cols-5 gap-3 mt-4">
-          <div class="glass rounded-2xl p-3">
-            <div class="text-xs opacity-80">Budget</div>
-            <div id="b-budget" class="text-xl font-extrabold">–</div>
-          </div>
-          <div class="glass rounded-2xl p-3">
-            <div class="text-xs opacity-80">Verbraucht</div>
-            <div id="b-spent" class="text-xl font-extrabold">–</div>
-          </div>
-          <div class="glass rounded-2xl p-3">
-            <div class="text-xs opacity-80">Rest</div>
-            <div id="b-remaining" class="text-xl font-extrabold">–</div>
-          </div>
-          <div class="glass rounded-2xl p-3">
-            <div class="text-xs opacity-80">KI Success</div>
-            <div id="b-success" class="text-xl font-extrabold">–</div>
-          </div>
-          <div class="glass rounded-2xl p-3">
-            <div class="text-xs opacity-80">KI Fail</div>
-            <div id="b-fail" class="text-xl font-extrabold">–</div>
-          </div>
-        </div>
-
-        <div class="text-xs opacity-80 mt-3">
-          Letzter Fehler: <span id="b-lasterr" class="opacity-95">–</span>
-        </div>
-      </div>
-    </section>
-
 
 <script>
   const locked = document.getElementById('locked');
@@ -211,24 +208,18 @@
   const tokenInp = document.getElementById('token');
   const btnUnlock = document.getElementById('btn-unlock');
 
-  const bBudget = document.getElementById('b-budget');
-  const bSpent = document.getElementById('b-spent');
-  const bRemaining = document.getElementById('b-remaining');
-  const bSuccess = document.getElementById('b-success');
-  const bFail = document.getElementById('b-fail');
-  const bLastErr = document.getElementById('b-lasterr');
-
-  const budgetLocked = document.getElementById('budget-locked');
-  const budgetContent = document.getElementById('budget-content');
-  const budgetTokenInp = document.getElementById('budget-token');
-  const btnBudgetUnlock = document.getElementById('btn-budget-unlock');
-
-  let budgetUnlocked = false;
-
   const rowsEl = document.getElementById('rows');
   const fSort = document.getElementById('f-sort');
   const fFailed = document.getElementById('f-failed');
   const fQ = document.getElementById('f-q');
+
+  // Gesamtübersicht (ehem. /articles)
+  const allFrom = document.getElementById('all-from');
+  const allTo = document.getElementById('all-to');
+  const btnAllFilter = document.getElementById('btn-all-filter');
+  const btnAllReset = document.getElementById('btn-all-reset');
+  const allRows = document.getElementById('all-rows');
+  const allCount = document.getElementById('all-count');
 
 function getToken(){
   // Safari/Privatmodus kann localStorage zicken -> zusätzlich Token per URL erlauben
@@ -258,7 +249,50 @@ function setToken(t){
   }
 
   function money(v){ return (Math.round(v*100)/100).toFixed(2).replace(".", ",") + " €"; }
+  function moneyPlain(v){
+    const n = Number(v||0);
+    if(!n) return "";
+    return (Math.round(n*100)/100).toFixed(2).replace(".", ",");
+  }
+  function dt(ts){
+    const n = Number(ts||0);
+    if(!n) return "";
+    const d = new Date(n*1000);
+    return d.toLocaleString();
+  }
   function badge(text, cls){ return `<span class="badge ${cls}">${text}</span>`; }
+
+  function renderAllRows(items){
+    if(!allRows) return;
+    allRows.innerHTML = (items||[]).map(it=>{
+      const img = it.image ? `<img src="${it.image}" style="height:54px;border-radius:12px;border:1px solid rgba(255,255,255,.25)">` : '';
+      return `
+        <tr class="border-t border-white/15">
+          <td class="py-2 pr-3">${img}</td>
+          <td class="py-2 pr-3 text-xs opacity-90">${dt(it.created_at)}</td>
+          <td class="py-2 pr-3 font-bold">${it.artikelnr}</td>
+          <td class="py-2 pr-3">${(it.sortiment||"")}</td>
+          <td class="py-2 pr-3">${String(it.titel||"").replaceAll("<","&lt;")}</td>
+          <td class="py-2 pr-3">${it.menge ?? 1}</td>
+          <td class="py-2 pr-3">${moneyPlain(it.rufpreis)}</td>
+          <td class="py-2 pr-3">${String(it.lagerort||"").replaceAll("<","&lt;")}</td>
+          <td class="py-2 pr-3">${(it.mitarbeiter||"")}</td>
+          <td class="py-2 pr-3"><a class="underline" href="/?edit=${it.artikelnr}">Bearbeiten</a></td>
+        </tr>
+      `;
+    }).join('');
+  }
+
+  async function loadAllArticles(){
+    if(!allRows) return;
+    const qs = new URLSearchParams();
+    if(allFrom && allFrom.value) qs.set('date_from', allFrom.value);
+    if(allTo && allTo.value) qs.set('date_to', allTo.value);
+    const js = await api('/api/articles' + (qs.toString()?('?' + qs.toString()):''));
+    const items = (js.items||[]);
+    if(allCount) allCount.textContent = items.length + ' Artikel';
+    renderAllRows(items);
+  }
 
   function renderRows(items){
     const q = (fQ.value || "").trim().toLowerCase();
@@ -289,17 +323,6 @@ function setToken(t){
       `;
     }).join("");
   }
-
-  async function loadBudget(){
-    const budget = await api("/api/admin/budget");
-    bBudget.textContent = money(budget.budget_eur);
-    bSpent.textContent = money(budget.spent_est_eur);
-    bRemaining.textContent = money(budget.remaining_est_eur);
-    bSuccess.textContent = String(budget.success_calls);
-    bFail.textContent = String(budget.failed_calls);
-    bLastErr.textContent = budget.last_error || "—";
-  }
-
 
   async function loadSortimente(){
     try{
@@ -404,9 +427,7 @@ fSort.innerHTML = '<option value="">Alle</option>' + items.map(x=>{
     const arts = await api("/api/admin/articles?" + qs.toString());
     renderRows(arts.items || []);
 
-    if(budgetUnlocked){
-      await loadBudget();
-    }
+    // keine Budget-Ansicht mehr
   }
 
 
@@ -421,18 +442,9 @@ fSort.innerHTML = '<option value="">Alle</option>' + items.map(x=>{
       locked.classList.add("hidden");
       content.classList.remove("hidden");
 
-      // Budget extra-lock (pro Browser-Session)
-      budgetUnlocked = (sessionStorage.getItem("MYAUKTION_BUDGET_UNLOCKED") === "1");
-      if(budgetUnlocked){
-        budgetLocked.classList.add("hidden");
-        budgetContent.classList.remove("hidden");
-      }else{
-        budgetLocked.classList.remove("hidden");
-        budgetContent.classList.add("hidden");
-      }
-
       await loadSortimente();
       await refresh();
+      await loadAllArticles();
     }catch(e){
       locked.classList.remove("hidden");
       content.classList.add("hidden");
@@ -450,31 +462,18 @@ fSort.innerHTML = '<option value="">Alle</option>' + items.map(x=>{
     await init();
   };
 
-  if(btnBudgetUnlock){
-    btnBudgetUnlock.onclick = async ()=>{
-      const entered = (budgetTokenInp?.value || "").trim();
-      const t = (getToken() || "").trim();
-
-      // Simple UI-Schutz: Budget nur anzeigen, wenn Passwort nochmals eingegeben wurde
-      if(!entered) return;
-      if(t && entered !== t){
-        alert("Falsches Budget-Passwort.");
-        return;
-      }
-
-      sessionStorage.setItem("MYAUKTION_BUDGET_UNLOCKED", "1");
-      budgetUnlocked = true;
-      budgetLocked.classList.add("hidden");
-      budgetContent.classList.remove("hidden");
-      await loadSortimente();
-      await refresh();
-    };
-  }
-
-
   fSort.onchange = refresh;
   fFailed.onchange = refresh;
   fQ.oninput = ()=> refresh();
+
+  if(btnAllFilter){ btnAllFilter.onclick = loadAllArticles; }
+  if(btnAllReset){
+    btnAllReset.onclick = ()=>{
+      if(allFrom) allFrom.value = '';
+      if(allTo) allTo.value = '';
+      loadAllArticles();
+    };
+  }
 
   // CSV Export Bereich (Von/Bis)
   const btnExportRange = document.getElementById('btn-export-range');
