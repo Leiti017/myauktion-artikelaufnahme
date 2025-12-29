@@ -1753,13 +1753,14 @@ def export_images_zip(request: Request, from_nr: str | None = None, to_nr: str |
                         # PROCESSED bevorzugen (falls vorhanden), sonst RAW
                         pp = (PROCESSED_DIR / p.name)
                         src = pp if pp.exists() else p
-                        # in zip nur Dateiname, weil schon eindeutig (ART...jpg)
+                        # In ZIP nur Dateiname, weil schon eindeutig (ART...jpg)
                         z.writestr(p.name, src.read_bytes())
                     except Exception:
-                        pass, weil schon eindeutig (ART...jpg)
-                        z.writestr(p.name, p.read_bytes())
-                    except Exception:
-                        pass
+                        # Fallback: RAW ins ZIP schreiben
+                        try:
+                            z.writestr(p.name, p.read_bytes())
+                        except Exception:
+                            pass
 
     content = bio.getvalue()
     return Response(
