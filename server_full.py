@@ -681,14 +681,23 @@ def _rebuild_meta_from_export_csv_if_missing() -> dict:
 
     try:
         with EXPORT_CSV.open("r", encoding="utf-8-sig", newline="") as f:
-            reader = csv.DictReader(f, delimiter=";")
+            sample = f.read(4096)
+            f.seek(0)
+            try:
+                # try detect delimiter: ; , tab
+                dialect = csv.Sniffer().sniff(sample, delimiters=";,\t,")
+                delim = dialect.delimiter
+            except Exception:
+                delim = ";"
+            reader = csv.DictReader(f, delimiter=delim)
+
             for row in reader:
                 art = str(row.get("ArtikelNr", "") or "").strip()
                 if not art:
                     continue
 
-                p = RAW_DIR / f"{art}.json"
-                if p.exists():
+                p_json = RAW_DIR / f"{art}.json"
+                if p_json.exists():
                     skipped += 1
                     continue
 
@@ -709,7 +718,7 @@ def _rebuild_meta_from_export_csv_if_missing() -> dict:
                     mj["lagerstand"] = _to_int(row.get("Lagerstand", 1), 1)
                     mj["uebernehmen"] = _to_int(row.get("Uebernehmen", 1), 1)
 
-                    # Sortiment: kann Name oder ID sein
+                    # Sortiment (kann Name oder ID sein)
                     sort_raw = str(row.get("Sortiment", "") or "").strip()
                     if sort_raw:
                         mj["sortiment"] = sort_raw
@@ -719,28 +728,28 @@ def _rebuild_meta_from_export_csv_if_missing() -> dict:
                         except Exception:
                             pass
 
-                    # Einlieferer-ID etc.
                     mj["einlieferer_id"] = str(row.get("Einlieferer-ID", "") or "").strip()
                     mj["angeliefert"] = str(row.get("Angeliefert", "") or "").strip()
                     mj["betriebsmittel"] = str(row.get("Betriebsmittel", "") or "").strip()
 
-                    # Bild zuordnen (885850.jpg / 885850_1.jpg / 885850_2.jpg ...)
+                    # Bild zuordnen: <art>.jpg oder <art>_1.jpg ...
                     mj["cover"] = _find_cover_image(art)
 
                     _save_meta_json(art, mj)
                     created += 1
                 except Exception:
                     errors += 1
+
+        # ensure local export exists and consistent (best effort)
+        try:
+            _ensure_export_csv_exists()
+        except Exception:
+            pass
+
+        return {"ok": True, "created": created, "skipped": skipped, "errors": errors}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
-    # CSV sicherstellen / rebuild falls nötig
-    try:
-        _ensure_export_csv_exists()
-    except Exception:
-        pass
-
-    return {"ok": True, "created": created, "skipped": skipped, "errors": errors}
 
 def _gdrive_restore_all() -> dict:
     """Restore RAW_DIR + export CSV from Google Drive (best effort)."""
@@ -778,7 +787,7 @@ def _gdrive_restore_all() -> dict:
                 continue
 
             # daily csv backups (optional restore of latest)
-            if name.startswith("artikel_export_") and name.lower().endswith(".csv"):
+            if name.lower().startswith("artikel_export") and name.lower().endswith(".csv"):
                 # download if export not present
                 if not EXPORT_CSV.exists():
                     EXPORT_CSV.write_bytes(_gdrive_download_file(token, fid))
