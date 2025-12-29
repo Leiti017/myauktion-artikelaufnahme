@@ -659,7 +659,6 @@ def _gdrive_download_file(token: str, file_id: str, mime_type: str | None = None
     return r.content
 
 def _gdrive_restore_all() -> dict:
-() -> dict:
     """Restore RAW_DIR + export CSV from Google Drive (best effort).
     Supports folders containing only CSV + JPG (rebuild JSON from CSV afterwards).
     """
@@ -711,7 +710,7 @@ def _gdrive_restore_all() -> dict:
                     return str(x.get("modifiedTime") or "")
                 csv_candidates.sort(key=_mtime_key, reverse=True)
                 best = csv_candidates[0]
-                EXPORT_CSV.write_bytes(_gdrive_download_file(token, str(best.get("id")), str(best.get("mimeType") or ""))
+                EXPORT_CSV.write_bytes(_gdrive_download_file(token, str(best.get("id")), str(best.get("mimeType") or "")))
                 restored_csv = 1
 
         # ensure local export exists and consistent
