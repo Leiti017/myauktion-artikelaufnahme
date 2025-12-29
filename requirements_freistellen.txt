@@ -1,8 +1,0 @@
-fastapi
-uvicorn
-python-multipart
-pillow
-
-# Background removal (freistellen)
-rembg
-onnxruntime
