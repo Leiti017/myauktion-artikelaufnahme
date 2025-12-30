@@ -19,7 +19,6 @@ from fastapi.responses import JSONResponse, FileResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import requests
-import base64
 
 
 
@@ -35,7 +34,7 @@ def _normalize_title(title: str) -> str:
     return t
 
 from pathlib import Path
-from PIL import Image, ImageOps, ImageFilter, ImageDraw
+from PIL import Image, ImageOps
 import io, json, time, csv, math, os, datetime, zipfile, hashlib, threading, random
 import re
 from typing import Any, Dict, Optional, Tuple
@@ -77,187 +76,10 @@ EXPORT_CSV = EXPORT_DIR / "artikel_export.csv"
 
 
 # ----------------------------
-# Image optimization (optional): rembg cutout -> 750x750 white bg + soft shadow
-# Runs async in background after upload so operators don't have to wait.
+# Image filename scheme + stable ordering
+# Titelbild: <artikelnr>.jpg
+# weitere:   <artikelnr>_1.jpg, <artikelnr>_2.jpg, ...
 # ----------------------------
-IMG_TARGET = (750, 750)
-
-# Lazy rembg loader (important on Render so the port binds immediately).
-# We only import/load the model when we actually process an image in the background.
-REMBG_AVAILABLE: Optional[bool] = None
-REMBG_SESSION = None
-_REMBG_LOCK = threading.Lock()
-
-def _ensure_rembg_session() -> bool:
-    global REMBG_AVAILABLE, REMBG_SESSION
-    if REMBG_AVAILABLE is True and REMBG_SESSION is not None:
-        return True
-    if REMBG_AVAILABLE is False:
-        return False
-    with _REMBG_LOCK:
-        if REMBG_AVAILABLE is True and REMBG_SESSION is not None:
-            return True
-        try:
-            from rembg import new_session  # type: ignore
-            REMBG_SESSION = new_session("u2net")
-            REMBG_AVAILABLE = True
-            return True
-        except Exception:
-            REMBG_AVAILABLE = False
-            REMBG_SESSION = None
-            return False
-
-
-def _processed_path_for_raw(raw_path: Path) -> Path:
-    return PROCESSED_DIR / raw_path.name
-
-
-def _best_image_path(raw_path: Path) -> Path:
-    """Return processed image if it exists, otherwise the raw image."""
-    pp = _processed_path_for_raw(raw_path)
-    return pp if pp.exists() else raw_path
-
-
-def _url_for_path(p: Path) -> str:
-    rel = p.relative_to(BASE_DIR)
-    return "/static/" + str(rel).replace("\\", "/")
-
-
-def _openai_edit_garment_3d_low(cutout_rgba: Image.Image, api_key: str) -> Image.Image:
-    """
-    Bekleidung 3D (LOW) via OpenAI Images API.
-    Input: freigestelltes PNG (RGBA). Output: RGB.
-    Bei Fehler wirft Exception -> Caller kann auf Standard-Freistellung fallbacken.
-    """
-    # Wir schicken ein PNG + Prompt, erwarten b64_json zurück.
-    url = "https://api.openai.com/v1/images/edits"
-    headers = {"Authorization": f"Bearer {api_key}"}
-
-    # Cutout als PNG Bytes
-    buf = io.BytesIO()
-    cutout_rgba.save(buf, format="PNG")
-    buf.seek(0)
-
-    prompt = (
-        "Create a realistic studio product photo of this garment: "
-        "clean 'invisible mannequin' 3D look (filled shape), natural fabric volume, "
-        "white background, subtle realistic ground shadow. Keep original garment details."
-    )
-
-    files = {
-        "image": ("garment.png", buf, "image/png"),
-    }
-    data = {
-        "model": "gpt-image-1",
-        "prompt": prompt,
-        "size": "1024x1024",
-        "quality": "low",
-        "background": "white",
-        "response_format": "b64_json",
-    }
-
-    r = requests.post(url, headers=headers, files=files, data=data, timeout=180)
-    if r.status_code != 200:
-        raise RuntimeError(f"OpenAI HTTP {r.status_code}: {r.text[:400]}")
-
-    payload = r.json()
-    b64 = payload["data"][0]["b64_json"]
-    img_bytes = base64.b64decode(b64)
-    return Image.open(io.BytesIO(img_bytes)).convert("RGB")
-
-
-def _optimize_one_image(raw_path: Path, mode: str = "standard", sortiment_name: str = "") -> None:
-    """
-    mode:
-      - "none"        -> keine Bearbeitung
-      - "standard"    -> rembg Cutout + Weiß + real. Schatten (Default)
-      - "clothing3d"  -> Bekleidung 3D (OpenAI) + danach Standard-Layout
-    """
-    try:
-        mode = (mode or "standard").strip().lower()
-        if mode in ("0", "false", "off", "disable", "disabled"):
-            mode = "none"
-        if mode in ("1", "rembg"):
-            mode = "standard"
-
-        if mode == "none":
-            return
-
-        out_path = _processed_path_for_raw(raw_path)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Wenn rembg nicht da ist, machen wir nur Resize auf Weiß (kein Cutout)
-        if not _ensure_rembg_session():
-            with Image.open(raw_path) as im:
-                im = ImageOps.exif_transpose(im).convert("RGB")
-                im = ImageOps.contain(im, IMG_TARGET)
-                final = Image.new("RGB", IMG_TARGET, (255, 255, 255))
-                ox = (IMG_TARGET[0] - im.size[0]) // 2
-                oy = (IMG_TARGET[1] - im.size[1]) // 2
-                final.paste(im, (ox, oy))
-                final.save(out_path, "JPEG", quality=90)
-            return
-
-        # 1) rembg Cutout
-        with Image.open(raw_path) as im:
-            im = ImageOps.exif_transpose(im).convert("RGBA")
-            buf = io.BytesIO()
-            im.save(buf, format="PNG")
-            buf.seek(0)
-            from rembg import remove  # type: ignore
-            cut = remove(buf.read(), session=REMBG_SESSION)
-            fg = Image.open(io.BytesIO(cut)).convert("RGBA")
-
-        # Kanten minimal bereinigen
-        alpha = fg.split()[-1].point(lambda v: 0 if v < 15 else v)
-        fg.putalpha(alpha)
-
-        # 2) Optional: Bekleidung 3D
-        if mode == "clothing3d":
-            api_key = (os.environ.get("OPENAI_API_KEY", "") or "").strip()
-            is_clothing = "bekleid" in (sortiment_name or "").lower()
-            if api_key and is_clothing:
-                try:
-                    out_rgb = _openai_edit_garment_3d_low(fg, api_key=api_key)
-                    # zurück nach RGBA, damit Layout-Teil unten gleich bleibt
-                    fg = out_rgb.convert("RGBA")
-                except Exception as e:
-                    print("[IMG] clothing3d failed -> fallback standard:", raw_path.name, e)
-            else:
-                # Wenn kein Key oder nicht Bekleidung -> Standard
-                pass
-
-        # 3) Standard Layout: Weiß + real. Bodenschatten
-        tw, th = IMG_TARGET
-        canvas = Image.new("RGBA", (tw, th), (255, 255, 255, 255))
-
-        # Größe so skalieren, dass Luft bleibt
-        fg2 = ImageOps.contain(fg, (int(tw * 0.86), int(th * 0.86)))
-
-        # Schatten: Ellipse unter dem Produkt, weichgezeichnet
-        shadow = Image.new("RGBA", (tw, th), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(shadow)
-        ell_w = int(fg2.size[0] * 0.78)
-        ell_h = max(18, int(fg2.size[1] * 0.12))
-        ell_x0 = (tw - ell_w) // 2
-        # leicht weiter unten, damit er "am Boden" wirkt
-        ell_y0 = min(th - ell_h - 10, int((th + fg2.size[1]) / 2) - ell_h // 3)
-        draw.ellipse(
-            (ell_x0, ell_y0, ell_x0 + ell_w, ell_y0 + ell_h),
-            fill=(0, 0, 0, 85),
-        )
-        shadow = shadow.filter(ImageFilter.GaussianBlur(radius=max(6, tw // 80)))
-        canvas.alpha_composite(shadow)
-
-        x = (tw - fg2.size[0]) // 2
-        y = (th - fg2.size[1]) // 2
-        canvas.alpha_composite(fg2, (x, y))
-
-        final = canvas.convert("RGB")
-        final.save(out_path, "JPEG", quality=90)
-    except Exception as e:
-        print("[IMG] optimize error:", raw_path.name, e)
-
 def _img_sort_key(p: Path, artikelnr: str) -> tuple[int, int, str]:
     """Stable sort: titelbild first, then numeric suffix."""
     name = p.name
@@ -1128,21 +950,6 @@ def _admin_guard(request: Request) -> Optional[JSONResponse]:
     return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
 
 
-
-def _best_image_url(p: Path) -> str:
-    """Return URL for processed version if exists, else raw."""
-    try:
-        cand = PROCESSED_DIR / p.name
-        use = cand if cand.exists() else p
-        rel = use.relative_to(BASE_DIR)
-        return "/static/" + str(rel).replace("\\", "/")
-    except Exception:
-        try:
-            rel = p.relative_to(BASE_DIR)
-            return "/static/" + str(rel).replace("\\", "/")
-        except Exception:
-            return ""
-
 # ----------------------------
 # Meta JSON
 # ----------------------------
@@ -1156,15 +963,9 @@ def _default_meta(artikelnr: str) -> Dict[str, Any]:
         "rufpreis": 0.0,
         "lagerort": "",
         "einlieferer": "",
-        "einlieferer_id": "",
         "mitarbeiter": "",
         "lagerstand": 1,
-        "uebernehmen": 1,
-        "angeliefert": "0",
-        "betriebsmittel": "",
         "sortiment": "",
-        "sortiment_id": "",
-        "sortiment_name": "",
         "reviewed": False,
         "ki_source": "",          # pending | realtime | failed | ""
         "ki_last_error": "",
@@ -1353,65 +1154,6 @@ def _apply_ki_to_meta(mj: Dict[str, Any], meta: Dict[str, Any]) -> None:
     mj["rufpreis"] = float(math.ceil(retail_f * 0.20)) if retail_f > 0 else 0.0
 
 
-
-# ----------------------------
-# Bild-Optimierung (Freistellen + weißer Studio-Hintergrund + Shadow)
-# ----------------------------
-def _run_image_background(raw_path: Path) -> None:
-    try:
-        from rembg import remove
-        from PIL import ImageFilter, ImageDraw
-    except Exception as e:
-        print("[BG-IMG] rembg/pillow missing:", e)
-        return
-
-    try:
-        im = Image.open(raw_path)
-        im = ImageOps.exif_transpose(im).convert("RGBA")
-        buf = io.BytesIO()
-        im.save(buf, format="PNG")
-        cut = remove(buf.getvalue())
-        fg = Image.open(io.BytesIO(cut)).convert("RGBA")
-
-        a = fg.split()[-1].point(lambda v: 0 if v < 15 else v)
-        fg.putalpha(a)
-
-        target_w, target_h = 750, 750
-        fg2 = ImageOps.contain(fg, (int(target_w * 0.86), int(target_h * 0.86)))
-
-        base = Image.new("RGBA", (target_w, target_h), (255, 255, 255, 255))
-
-        shadow = Image.new("L", (target_w, target_h), 0)
-        draw = ImageDraw.Draw(shadow)
-
-        w, h = fg2.size
-        shadow_w = int(w * 0.72)
-        shadow_h = max(8, int(h * 0.16))
-        cx = target_w // 2
-        cy = int(target_h * 0.80)
-
-        sx0 = cx - shadow_w // 2
-        sx1 = cx + shadow_w // 2
-        sy0 = cy - shadow_h // 2
-        sy1 = cy + shadow_h // 2
-
-        draw.ellipse([sx0, sy0, sx1, sy1], fill=200)
-        shadow = shadow.filter(ImageFilter.GaussianBlur(14))
-        shadow_rgba = Image.new("RGBA", (target_w, target_h), (0, 0, 0, 0))
-        shadow_rgba.paste((0, 0, 0, 110), mask=shadow)
-
-        base.alpha_composite(shadow_rgba)
-
-        ox = (target_w - w) // 2
-        oy = int(target_h * 0.80) - h
-        base.alpha_composite(fg2, (ox, oy))
-
-        out = base.convert("RGB")
-        out_path = PROCESSED_DIR / raw_path.name
-        out.save(out_path, "JPEG", quality=90)
-    except Exception as e:
-        print("[BG-IMG] failed:", e)
-
 def _run_meta_background(artikelnr: str, img_path: Path) -> None:
     print(f"[BG-KI] Starte Hintergrund-KI für Artikel {artikelnr}")
     meta, ok, err, runtime_ms = _run_meta_once(artikelnr, img_path)
@@ -1434,7 +1176,11 @@ def _run_meta_background(artikelnr: str, img_path: Path) -> None:
         _save_meta_json(artikelnr, mj)
         _usage_fail(mj["ki_last_error"])
 
-    _rebuild_csv_export()
+    # CSV Export: nur die betroffene Zeile aktualisieren (schnell). Fallback: kompletter Rebuild.
+    try:
+        _update_csv_row_for_art(artikelnr, mj)
+    except Exception:
+        _rebuild_csv_export()
     print(f"[BG-KI] Fertig für Artikel {artikelnr} – ki_ok={ok}")
 
 
@@ -1581,8 +1327,11 @@ def _list_articles() -> list[dict]:
         created = int(mj.get("created_at", 0) or 0)
         updated = int(mj.get("updated_at", 0) or 0)
 
-        pics = _list_image_paths(nr, directory=RAW_DIR)
-        img_url = _url_for_path(_best_image_path(pics[-1])) if pics else ""
+        pics = _list_image_paths(nr)
+        img_url = ""
+        if pics:
+            rel = pics[-1].relative_to(BASE_DIR)
+            img_url = "/static/" + str(rel).replace("\\", "/")
 
         items.append({
             "artikelnr": nr,
@@ -1799,29 +1548,22 @@ def export_csv(from_nr: str | None = None, to_nr: str | None = None, sortiment_i
 # ----------------------------
 # Bilder ZIP Export (Admin, Von/Bis ArtikelNr)
 # ----------------------------
-
-def _best_image_bytes_for_zip(raw_path: Path) -> tuple[str, bytes] | None:
-    """Prefer processed image if present, else raw. Returns (filename, bytes)."""
-    try:
-        stem = raw_path.stem
-        cand = PROCESSED_DIR / raw_path.name
-        if cand.exists():
-            return cand.name, cand.read_bytes()
-        for pf in PROCESSED_DIR.glob(stem + ".*"):
-            if pf.exists():
-                return pf.name, pf.read_bytes()
-        return raw_path.name, raw_path.read_bytes()
-    except Exception:
-        return None
-
 def _images_for_art(artikelnr: str):
-    """Return list of image Paths for article.
-
-    Prefer processed images when available, but keep the raw naming scheme/order.
-    """
+    """Return list of image Paths for article, ordered: ART.jpg, ART_1.jpg, ART_2.jpg..."""
     art = str(artikelnr).strip()
-    raw = _list_image_paths(art, directory=RAW_DIR)
-    return [_best_image_path(p) for p in raw]
+    pics = list(RAW_DIR.glob(f"{art}*.jpg"))
+    def _k(p: Path):
+        if p.name == f"{art}.jpg":
+            return 0
+        m = re.search(rf"^{re.escape(art)}_(\d+)\.jpg$", p.name)
+        if m:
+            try:
+                return int(m.group(1))
+            except Exception:
+                return 999999
+        return 999999
+    pics.sort(key=_k)
+    return pics
 
 def _in_range_art(n: str, from_nr: str | None, to_nr: str | None) -> bool:
     try:
@@ -1874,9 +1616,7 @@ def export_images_zip(request: Request, from_nr: str | None = None, to_nr: str |
                 for p in _images_for_art(art):
                     try:
                         # in zip nur Dateiname, weil schon eindeutig (ART...jpg)
-                        tmp = _best_image_bytes_for_zip(p)
-                        if tmp:
-                            z.writestr(tmp[0], tmp[1])
+                        z.writestr(p.name, p.read_bytes())
                     except Exception:
                         pass
 
@@ -1912,9 +1652,6 @@ def check_artnr(artikelnr: str):
 async def upload(
     file: UploadFile = File(...),
     artikelnr: str = Form(...),
-    img_mode: str = Form(""),
-    sortiment_name: str = Form(""),
-    bg_remove: str = Form("0"),
     background_tasks: BackgroundTasks = None,
 ):
     artikelnr = str(artikelnr).strip()
@@ -1944,31 +1681,8 @@ async def upload(
     mj["batch_done"] = False
     _save_meta_json(artikelnr, mj)
 
-    _rebuild_csv_export()
-
+    # CSV Export wird nicht mehr bei jedem Upload komplett neu gebaut (Performance)
     if background_tasks:
-        # Bild-Optimierung läuft IMMER im Hintergrund (Standard), außer man schaltet es explizit aus.
-        mode = (img_mode or "").strip().lower()
-
-        # Backward-Compat (alte Clients): bg_remove=1 -> Standard
-        if not mode and str(bg_remove or "").strip() in ("1", "true", "on", "yes"):
-            mode = "standard"
-
-        # Default: Standard aktiv
-        if not mode:
-            mode = "standard"
-
-        # Normalisieren
-        if mode in ("0", "none", "off", "false", "disabled", "disable"):
-            mode = "none"
-        if mode in ("1", "rembg", "auto", "default", "on", "true", "yes"):
-            mode = "standard"
-
-        if mode not in ("none", "standard", "clothing3d"):
-            mode = "standard"
-
-        if mode != "none":
-            background_tasks.add_task(_optimize_one_image, out, mode, sortiment_name or "")
         background_tasks.add_task(_run_meta_background, artikelnr, out)
 
     return {"ok": True, "filename": out.name}
@@ -1984,7 +1698,8 @@ def images(artikelnr: str):
 
     files = []
     for f in _list_image_paths(artikelnr):
-        files.append(_url_for_path(_best_image_path(f)))
+        rel = f.relative_to(BASE_DIR)
+        files.append("/static/" + str(rel).replace("\\", "/"))
 
     # cover-first ordering
     if cover:
@@ -2126,7 +1841,10 @@ def meta(artikelnr: str):
     mj = _load_meta_json(artikelnr)
 
     pics = _list_image_paths(artikelnr)
-    img_url = _url_for_path(_best_image_path(pics[-1])) if pics else ""
+    img_url = ""
+    if pics:
+        rel = pics[-1].relative_to(BASE_DIR)
+        img_url = "/static/" + str(rel).replace("\\", "/")
 
     return {
         "ok": True,
@@ -2137,23 +1855,13 @@ def meta(artikelnr: str):
         "retail_price": mj.get("retail_price", 0.0) or 0.0,
         "rufpreis": mj.get("rufpreis", 0.0) or 0.0,
         "lagerort": mj.get("lagerort", "") or "",
-        # add missing fields so edit-mode can fill everything correctly
-        "menge": int(mj.get("menge", 1) or 1),
-        "lagerstand": int(mj.get("lagerstand", 1) or 1),
-        "uebernehmen": int(mj.get("uebernehmen", 1) or 1),
-        "angeliefert": mj.get("angeliefert", "") or "",
-        "betriebsmittel": mj.get("betriebsmittel", "") or "",
         "sortiment": mj.get("sortiment", "") or "",
-        "sortiment_id": mj.get("sortiment_id", "") or "",
-        "sortiment_name": mj.get("sortiment_name", "") or "",
         "einlieferer": mj.get("einlieferer", "") or "",
-        "einlieferer_id": mj.get("einlieferer_id", "") or "",
         "mitarbeiter": mj.get("mitarbeiter", "") or "",
         "reviewed": bool(mj.get("reviewed", False)),
         "ki_source": mj.get("ki_source", "") or "",
         "ki_last_error": mj.get("ki_last_error", "") or "",
         "last_image": mj.get("last_image", "") or "",
-        "cover": mj.get("cover", "") or "",
         "image": img_url,
     }
 
@@ -2221,7 +1929,7 @@ def save(data: Dict[str, Any]):
     if "lagerstand" in data: mj["lagerstand"] = int(data.get("lagerstand") or 1)
     if "uebernehmen" in data: mj["uebernehmen"] = int(data.get("uebernehmen") or 1)
     if "einlieferer_id" in data: mj["einlieferer_id"] = str(data.get("einlieferer_id") or "")
-    if "angeliefert" in data: mj["angeliefert"] = ("0" if str(data.get("angeliefert") or "").strip()=="" else str(data.get("angeliefert")).strip())
+    if "angeliefert" in data: mj["angeliefert"] = str(data.get("angeliefert") or "")
     if "betriebsmittel" in data: mj["betriebsmittel"] = str(data.get("betriebsmittel") or "")
     if "mitarbeiter" in data: mj["mitarbeiter"] = str(data.get("mitarbeiter") or "")
 

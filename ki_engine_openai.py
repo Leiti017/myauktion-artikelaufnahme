@@ -131,8 +131,21 @@ Keine zusätzlichen Zeilen. Keine Erklärungen. Keine Fantasie.
 
 
 def _encode_image_to_b64(image_path: str) -> str:
-    with open(image_path, "rb") as f:
-        return base64.b64encode(f.read()).decode("utf-8")
+    """Encode image as base64, but downscale/compress for speed (OpenAI Vision)."""
+    from PIL import Image, ImageOps
+    import io, base64
+
+    img = Image.open(image_path)
+    img = ImageOps.exif_transpose(img)
+    img = img.convert("RGB")
+
+    # Smaller payload = faster + cheaper. 768px is usually enough for product recognition.
+    img.thumbnail((768, 768))
+
+    buf = io.BytesIO()
+    # quality 72 is a good speed/quality compromise for Vision
+    img.save(buf, format="JPEG", quality=72, optimize=True)
+    return base64.b64encode(buf.getvalue()).decode("utf-8")
 
 
 def _parse_response(text: str) -> Optional[Dict[str, Any]]:
