@@ -10,12 +10,12 @@
 # - Live-Check Artikelnummer: /api/check_artnr
 # - Foto löschen: /api/delete_image
 # - CSV Export (inkl. Kategorie)
-# - Admin-Only Admin-Flags (Token geschützt): /api/admin/articles
+# - Admin-Only Budget/Flags (Token geschützt): /api/admin/budget /api/admin/articles
 #
 # Start:
 #   python -m uvicorn server_full:app --host 0.0.0.0 --port 5050
 from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, Request, Response
-from fastapi.responses import JSONResponse, FileResponse, RedirectResponse
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import requests
@@ -34,24 +34,7 @@ def _normalize_title(title: str) -> str:
     return t
 
 from pathlib import Path
-from PIL import Image, ImageOps, ImageFilter, ImageDraw
-
-TARGET_SIZE = (750, 750)  # exakt wie Desktop-Tool
-
-# Optional: Background Removal (Desktop-Version). Falls 'rembg' nicht installiert ist, wird nur optimiert.
-_rembg_remove = None
-_rembg_session = None
-try:
-    from rembg import remove as _rembg_remove, new_session as _rembg_new_session  # type: ignore
-    try:
-        # Desktop nutzt u2net – wir initialisieren eine Session für Speed.
-        _rembg_session = _rembg_new_session("u2net")
-    except Exception:
-        _rembg_session = None
-except Exception:
-    _rembg_remove = None
-    _rembg_session = None
-
+from PIL import Image, ImageOps
 import io, json, time, csv, math, os, datetime, zipfile, hashlib, threading, random
 import re
 from typing import Any, Dict, Optional, Tuple
@@ -90,120 +73,6 @@ PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 EXPORT_CSV = EXPORT_DIR / "artikel_export.csv"
-
-# ----------------------------
-# Bild-Optimierung / Freistellen (optional, läuft im Hintergrund)
-# - RAW bleibt immer erhalten
-# - PROCESSED wird für Vorschau/Export bevorzugt (wenn vorhanden)
-# ----------------------------
-def _processed_image_path(raw_path: Path) -> Path:
-    # keep same filename in processed dir (jpg)
-    return PROCESSED_DIR / raw_path.name
-
-def _optimize_image_only(raw_path: Path) -> None:
-    """Re-encode RAW in PROCESSED (kleiner, sauber)."""
-    try:
-        img = Image.open(raw_path)
-        img = ImageOps.exif_transpose(img).convert("RGB")
-        img.thumbnail((1400, 1400))
-        out = _processed_image_path(raw_path)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        img.save(out, "JPEG", quality=82, optimize=True)
-    except Exception:
-        # best-effort: ignore
-        return
-
-def _remove_background_and_save(raw_path: Path) -> None:
-    """Desktop-Workflow 1:1:
-    rembg -> Alpha säubern -> Crop auf Objekt -> Bodenschatten -> 750x750 -> JPG.
-    Fallback: wenn rembg fehlt oder Fehler -> nur optimieren.
-    """
-    out = _processed_image_path(raw_path)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        # 1) load & orient
-        with Image.open(raw_path) as im:
-            im = ImageOps.exif_transpose(im).convert("RGBA")
-
-            if _rembg_remove is None:
-                # Kein Freistellen möglich -> nur optimieren, aber trotzdem auf Zielgröße
-                rgb = im.convert("RGB")
-                rgb = ImageOps.contain(rgb, TARGET_SIZE)
-                final = Image.new("RGB", TARGET_SIZE, (255, 255, 255))
-                ox = (TARGET_SIZE[0] - rgb.size[0]) // 2
-                oy = (TARGET_SIZE[1] - rgb.size[1]) // 2
-                final.paste(rgb, (ox, oy))
-                final.save(out, "JPEG", quality=90, optimize=True)
-                return
-
-            # rembg expects bytes
-            buf = io.BytesIO()
-            im.save(buf, format="PNG")
-            buf.seek(0)
-            cut = _rembg_remove(buf.getvalue(), session=_rembg_session) if _rembg_session else _rembg_remove(buf.getvalue())
-            fg = Image.open(io.BytesIO(cut)).convert("RGBA")
-
-        # 2) alpha cleanup
-        alpha = fg.split()[-1]
-        alpha = alpha.point(lambda v: 0 if v < 20 else v)
-        fg.putalpha(alpha)
-
-        # 3) bbox crop
-        bbox = alpha.getbbox()
-        if not bbox:
-            # Desktop-Fallback: weißer Hintergrund + contain
-            base = Image.new("RGB", TARGET_SIZE, (255, 255, 255))
-            im_rgb = Image.open(raw_path)
-            im_rgb = ImageOps.exif_transpose(im_rgb).convert("RGB")
-            im_rgb = ImageOps.contain(im_rgb, TARGET_SIZE)
-            x = (base.size[0] - im_rgb.size[0]) // 2
-            y = (base.size[1] - im_rgb.size[1]) // 2
-            base.paste(im_rgb, (x, y))
-            base.save(out, "JPEG", quality=90, optimize=True)
-            return
-
-        x0, y0, x1, y1 = bbox
-        fg_cropped = fg.crop((x0, y0, x1, y1))
-        w, h = fg_cropped.size
-
-        # 4) floor shadow (ellipse)
-        shadow_mask = Image.new("L", (w, h), 0)
-        draw = ImageDraw.Draw(shadow_mask)
-        shadow_w = int(w * 0.7)
-        shadow_h = max(6, int(h * 0.15))
-        cx = w // 2
-        sx0 = max(0, cx - shadow_w // 2)
-        sx1 = min(w, cx + shadow_w // 2)
-        sy0 = max(0, h - shadow_h - 1)
-        sy1 = h
-        draw.ellipse([sx0, sy0, sx1, sy1], fill=255)
-        shadow_mask = shadow_mask.filter(ImageFilter.GaussianBlur(12))
-        shadow_mask = shadow_mask.point(lambda a: int(a * (90 / 255.0)))
-
-        shadow_rgba = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-        shadow_rgba.paste((0, 0, 0, 255), mask=shadow_mask)
-
-        base_rgba = Image.new("RGBA", (w, h), (255, 255, 255, 255))
-        base_rgba.paste(shadow_rgba, (0, 0), shadow_rgba)
-        base_rgba.paste(fg_cropped, (0, 0), fg_cropped)
-
-        # 5) fit to target and center
-        result = base_rgba.convert("RGB")
-        result = ImageOps.contain(result, TARGET_SIZE)
-        final = Image.new("RGB", TARGET_SIZE, (255, 255, 255))
-        ox = (TARGET_SIZE[0] - result.size[0]) // 2
-        oy = (TARGET_SIZE[1] - result.size[1]) // 2
-        final.paste(result, (ox, oy))
-        final.save(out, "JPEG", quality=90, optimize=True)
-
-    except Exception:
-        # best-effort fallback
-        try:
-            _optimize_image_only(raw_path)
-        except Exception:
-            pass
-        return
-
 
 
 # ----------------------------
@@ -1470,14 +1339,6 @@ def _list_articles() -> list[dict]:
             "rufpreis": mj.get("rufpreis", 0.0) or 0.0,
             "retail_price": mj.get("retail_price", 0.0) or 0.0,
             "mitarbeiter": mj.get("mitarbeiter", "") or "",
-        "menge": int(mj.get("menge", 1) or 1),
-        "lagerstand": int(mj.get("lagerstand", 1) or 1),
-        "uebernehmen": int(mj.get("uebernehmen", 1) or 1),
-        "einlieferer_id": str(mj.get("einlieferer_id") or ""),
-        "angeliefert": str(mj.get("angeliefert") or ""),
-        "betriebsmittel": str(mj.get("betriebsmittel") or ""),
-        "sortiment_id": str(mj.get("sortiment_id") or ""),
-        "sortiment_name": str(mj.get("sortiment_name") or mj.get("sortiment") or ""),
             "angeliefert": mj.get("angeliefert", "") or "",
             "created_at": created,
             "updated_at": updated,
@@ -1502,8 +1363,7 @@ def admin_root():
 
 @app.get("/articles")
 def articles_page():
-    # Gesamtartikel ist jetzt im Admin integriert
-    return RedirectResponse(url="/admin", status_code=302)
+    return FileResponse(str(BASE_DIR / "articles.html"))
 
 
 @app.api_route("/api/health", methods=["GET","HEAD"])
@@ -1750,17 +1610,10 @@ def export_images_zip(request: Request, from_nr: str | None = None, to_nr: str |
                         continue
                 for p in _images_for_art(art):
                     try:
-                        # PROCESSED bevorzugen (falls vorhanden), sonst RAW
-                        pp = (PROCESSED_DIR / p.name)
-                        src = pp if pp.exists() else p
-                        # In ZIP nur Dateiname, weil schon eindeutig (ART...jpg)
-                        z.writestr(p.name, src.read_bytes())
+                        # in zip nur Dateiname, weil schon eindeutig (ART...jpg)
+                        z.writestr(p.name, p.read_bytes())
                     except Exception:
-                        # Fallback: RAW ins ZIP schreiben
-                        try:
-                            z.writestr(p.name, p.read_bytes())
-                        except Exception:
-                            pass
+                        pass
 
     content = bio.getvalue()
     return Response(
@@ -1794,7 +1647,6 @@ def check_artnr(artikelnr: str):
 async def upload(
     file: UploadFile = File(...),
     artikelnr: str = Form(...),
-    do_cutout: str = Form("0"),
     background_tasks: BackgroundTasks = None,
 ):
     artikelnr = str(artikelnr).strip()
@@ -1816,17 +1668,6 @@ async def upload(
     out.parent.mkdir(parents=True, exist_ok=True)
     img.save(out, "JPEG", quality=78)
 
-    # optional: Freistellen/Optimierung im Hintergrund (blockiert Aufnahme NICHT)
-    try:
-        want_cut = str(do_cutout or "0").strip() in {"1","true","yes","on"}
-    except Exception:
-        want_cut = False
-    if background_tasks:
-        if want_cut:
-            background_tasks.add_task(_remove_background_and_save, out)
-        else:
-            background_tasks.add_task(_optimize_image_only, out)
-
     # set pending, damit Polling NICHT bei altem realtime sofort stoppt
     mj = _load_meta_json(artikelnr)
     mj["last_image"] = out.name
@@ -1844,7 +1685,7 @@ async def upload(
 
 
 @app.get("/api/images")
-def images(artikelnr: str, processed: int = 0):
+def images(artikelnr: str):
     artikelnr = str(artikelnr).strip()
     _migrate_legacy_zero(artikelnr)
     _migrate_bad_suffixes(artikelnr)
@@ -1852,9 +1693,7 @@ def images(artikelnr: str, processed: int = 0):
     cover = str(meta.get("cover") or "").strip()
 
     files = []
-    use_processed = bool(int(processed or 0))
-    directory = PROCESSED_DIR if use_processed else RAW_DIR
-    for f in _list_image_paths(artikelnr, directory=directory):
+    for f in _list_image_paths(artikelnr):
         rel = f.relative_to(BASE_DIR)
         files.append("/static/" + str(rel).replace("\\", "/"))
 
@@ -2015,14 +1854,6 @@ def meta(artikelnr: str):
         "sortiment": mj.get("sortiment", "") or "",
         "einlieferer": mj.get("einlieferer", "") or "",
         "mitarbeiter": mj.get("mitarbeiter", "") or "",
-        "menge": int(mj.get("menge", 1) or 1),
-        "lagerstand": int(mj.get("lagerstand", 1) or 1),
-        "uebernehmen": int(mj.get("uebernehmen", 1) or 1),
-        "einlieferer_id": str(mj.get("einlieferer_id") or ""),
-        "angeliefert": str(mj.get("angeliefert") or ""),
-        "betriebsmittel": str(mj.get("betriebsmittel") or ""),
-        "sortiment_id": str(mj.get("sortiment_id") or ""),
-        "sortiment_name": str(mj.get("sortiment_name") or mj.get("sortiment") or ""),
         "reviewed": bool(mj.get("reviewed", False)),
         "ki_source": mj.get("ki_source", "") or "",
         "ki_last_error": mj.get("ki_last_error", "") or "",
@@ -2296,6 +2127,30 @@ def admin_sortimente_delete(request: Request, data: Dict[str, Any]):
 
     _save_sortimente(items)
     return {"ok": True, "items": _load_sortimente()}
+
+
+@app.get("/api/admin/budget")
+def admin_budget(request: Request):
+    guard = _admin_guard(request)
+    if guard:
+        return guard
+
+    u = _load_usage()
+    budget = float(u.get("budget_eur", DEFAULT_BUDGET_EUR))
+    spent = float(u.get("spent_est_eur", 0.0))
+    remaining = round(max(budget - spent, 0.0), 4)
+
+    return {
+        "ok": True,
+        "budget_eur": budget,
+        "spent_est_eur": spent,
+        "remaining_est_eur": remaining,
+        "success_calls": int(u.get("success_calls", 0)),
+        "failed_calls": int(u.get("failed_calls", 0)),
+        "cost_per_success_call_eur": float(u.get("cost_per_success_call_eur", COST_PER_SUCCESS_CALL_EUR)),
+        "last_success_at": int(u.get("last_success_at", 0)),
+        "last_error": u.get("last_error", "") or "",
+    }
 
 
 @app.get("/api/admin/articles")

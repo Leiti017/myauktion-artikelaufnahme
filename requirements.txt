@@ -1,15 +1,5 @@
-# --- Web / API ---
-fastapi==0.115.6
-uvicorn[standard]==0.30.6
-
-# --- Image Freistellen (Desktop-Logik) ---
-rembg==2.0.69
-onnxruntime==1.20.1
-
-# --- Image Processing ---
-Pillow==10.4.0
-numpy==2.1.3
-
-# --- Utils (sehr wahrscheinlich bereits genutzt) ---
-python-multipart==0.0.9
-requests==2.32.3
+fastapi
+uvicorn
+python-multipart
+pillow
+requests
