@@ -10,12 +10,12 @@
 # - Live-Check Artikelnummer: /api/check_artnr
 # - Foto löschen: /api/delete_image
 # - CSV Export (inkl. Kategorie)
-# - Admin-Only Admin-Flags (Token geschützt): /api/admin/articles
+# - Admin-Only Budget/Flags (Token geschützt): /api/admin/budget /api/admin/articles
 #
 # Start:
 #   python -m uvicorn server_full:app --host 0.0.0.0 --port 5050
 from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, Request, Response
-from fastapi.responses import JSONResponse, FileResponse, RedirectResponse
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import requests
@@ -1176,11 +1176,7 @@ def _run_meta_background(artikelnr: str, img_path: Path) -> None:
         _save_meta_json(artikelnr, mj)
         _usage_fail(mj["ki_last_error"])
 
-    # CSV Export: nur die betroffene Zeile aktualisieren (schnell). Fallback: kompletter Rebuild.
-    try:
-        _update_csv_row_for_art(artikelnr, mj)
-    except Exception:
-        _rebuild_csv_export()
+    _rebuild_csv_export()
     print(f"[BG-KI] Fertig für Artikel {artikelnr} – ki_ok={ok}")
 
 
@@ -1367,8 +1363,7 @@ def admin_root():
 
 @app.get("/articles")
 def articles_page():
-    # Gesamtartikel ist jetzt im Admin integriert
-    return RedirectResponse(url="/admin", status_code=302)
+    return FileResponse(str(BASE_DIR / "articles.html"))
 
 
 @app.api_route("/api/health", methods=["GET","HEAD"])
@@ -1681,7 +1676,8 @@ async def upload(
     mj["batch_done"] = False
     _save_meta_json(artikelnr, mj)
 
-    # CSV Export wird nicht mehr bei jedem Upload komplett neu gebaut (Performance)
+    _rebuild_csv_export()
+
     if background_tasks:
         background_tasks.add_task(_run_meta_background, artikelnr, out)
 
@@ -2131,6 +2127,30 @@ def admin_sortimente_delete(request: Request, data: Dict[str, Any]):
 
     _save_sortimente(items)
     return {"ok": True, "items": _load_sortimente()}
+
+
+@app.get("/api/admin/budget")
+def admin_budget(request: Request):
+    guard = _admin_guard(request)
+    if guard:
+        return guard
+
+    u = _load_usage()
+    budget = float(u.get("budget_eur", DEFAULT_BUDGET_EUR))
+    spent = float(u.get("spent_est_eur", 0.0))
+    remaining = round(max(budget - spent, 0.0), 4)
+
+    return {
+        "ok": True,
+        "budget_eur": budget,
+        "spent_est_eur": spent,
+        "remaining_est_eur": remaining,
+        "success_calls": int(u.get("success_calls", 0)),
+        "failed_calls": int(u.get("failed_calls", 0)),
+        "cost_per_success_call_eur": float(u.get("cost_per_success_call_eur", COST_PER_SUCCESS_CALL_EUR)),
+        "last_success_at": int(u.get("last_success_at", 0)),
+        "last_error": u.get("last_error", "") or "",
+    }
 
 
 @app.get("/api/admin/articles")
