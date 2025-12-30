@@ -34,7 +34,7 @@ def _normalize_title(title: str) -> str:
     return t
 
 from pathlib import Path
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageFilter, ImageDraw
 import io, json, time, csv, math, os, datetime, zipfile, hashlib, threading, random
 import re
 from typing import Any, Dict, Optional, Tuple
@@ -73,6 +73,100 @@ PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 EXPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 EXPORT_CSV = EXPORT_DIR / "artikel_export.csv"
+
+
+# ----------------------------
+# Image optimization (optional): rembg cutout -> 750x750 white bg + soft shadow
+# Runs async in background after upload so operators don't have to wait.
+# ----------------------------
+IMG_TARGET = (750, 750)
+
+REMBG_AVAILABLE = False
+REMBG_SESSION = None
+try:
+    # rembg is optional (but recommended). If not installed, we just keep raw images.
+    from rembg import new_session, remove  # type: ignore
+    REMBG_SESSION = new_session("u2net")
+    REMBG_AVAILABLE = True
+except Exception as _e:
+    REMBG_AVAILABLE = False
+    REMBG_SESSION = None
+
+
+def _processed_path_for_raw(raw_path: Path) -> Path:
+    return PROCESSED_DIR / raw_path.name
+
+
+def _best_image_path(raw_path: Path) -> Path:
+    """Return processed image if it exists, otherwise the raw image."""
+    pp = _processed_path_for_raw(raw_path)
+    return pp if pp.exists() else raw_path
+
+
+def _url_for_path(p: Path) -> str:
+    rel = p.relative_to(BASE_DIR)
+    return "/static/" + str(rel).replace("\\", "/")
+
+
+def _optimize_one_image(raw_path: Path, mode: str = "rembg") -> None:
+    """Create/overwrite processed image for a given raw JPG."""
+    try:
+        if not raw_path.exists():
+            return
+        out_path = _processed_path_for_raw(raw_path)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # If rembg isn't available, just copy/standardize to target size
+        if (mode or "").lower() != "none" and REMBG_AVAILABLE:
+            with Image.open(raw_path) as im:
+                im = ImageOps.exif_transpose(im).convert("RGBA")
+                buf = io.BytesIO()
+                im.save(buf, format="PNG")
+                buf.seek(0)
+                cut = remove(buf.read(), session=REMBG_SESSION)
+                fg = Image.open(io.BytesIO(cut)).convert("RGBA")
+
+            # clean edges a bit
+            alpha = fg.split()[-1]
+            alpha = alpha.point(lambda v: 0 if v < 20 else v)
+            fg.putalpha(alpha)
+
+            bbox = alpha.getbbox()
+            if bbox:
+                fg = fg.crop(bbox)
+        else:
+            with Image.open(raw_path) as fg_im:
+                fg = ImageOps.exif_transpose(fg_im).convert("RGBA")
+
+        # scale into target
+        tw, th = IMG_TARGET
+        fg2 = ImageOps.contain(fg, (tw, th))
+        canvas = Image.new("RGBA", (tw, th), (255, 255, 255, 255))
+
+        # soft contact shadow under the object
+        # (simple blurred ellipse near the bottom)
+        shadow = Image.new("RGBA", (tw, th), (0, 0, 0, 0))
+        dr = ImageDraw.Draw(shadow)
+        sw = int(fg2.size[0] * 0.72)
+        sh = max(10, int(fg2.size[0] * 0.12))
+        cx = tw // 2
+        cy = int(th * 0.80)
+        dr.ellipse(
+            (cx - sw // 2, cy - sh // 2, cx + sw // 2, cy + sh // 2),
+            fill=(0, 0, 0, 85),
+        )
+        shadow = shadow.filter(ImageFilter.GaussianBlur(radius=max(6, tw // 80)))
+        canvas.alpha_composite(shadow)
+
+        x = (tw - fg2.size[0]) // 2
+        y = (th - fg2.size[1]) // 2
+        canvas.alpha_composite(fg2, (x, y))
+
+        final = canvas.convert("RGB")
+        final.save(out_path, "JPEG", quality=90)
+    except Exception as e:
+        print("[IMG] optimize error:", raw_path.name, e)
+
 
 
 # ----------------------------
@@ -1323,11 +1417,8 @@ def _list_articles() -> list[dict]:
         created = int(mj.get("created_at", 0) or 0)
         updated = int(mj.get("updated_at", 0) or 0)
 
-        pics = _list_image_paths(nr)
-        img_url = ""
-        if pics:
-            rel = pics[-1].relative_to(BASE_DIR)
-            img_url = "/static/" + str(rel).replace("\\", "/")
+        pics = _list_image_paths(nr, directory=RAW_DIR)
+        img_url = _url_for_path(_best_image_path(pics[-1])) if pics else ""
 
         items.append({
             "artikelnr": nr,
@@ -1545,21 +1636,13 @@ def export_csv(from_nr: str | None = None, to_nr: str | None = None, sortiment_i
 # Bilder ZIP Export (Admin, Von/Bis ArtikelNr)
 # ----------------------------
 def _images_for_art(artikelnr: str):
-    """Return list of image Paths for article, ordered: ART.jpg, ART_1.jpg, ART_2.jpg..."""
+    """Return list of image Paths for article.
+
+    Prefer processed images when available, but keep the raw naming scheme/order.
+    """
     art = str(artikelnr).strip()
-    pics = list(RAW_DIR.glob(f"{art}*.jpg"))
-    def _k(p: Path):
-        if p.name == f"{art}.jpg":
-            return 0
-        m = re.search(rf"^{re.escape(art)}_(\d+)\.jpg$", p.name)
-        if m:
-            try:
-                return int(m.group(1))
-            except Exception:
-                return 999999
-        return 999999
-    pics.sort(key=_k)
-    return pics
+    raw = _list_image_paths(art, directory=RAW_DIR)
+    return [_best_image_path(p) for p in raw]
 
 def _in_range_art(n: str, from_nr: str | None, to_nr: str | None) -> bool:
     try:
@@ -1648,6 +1731,7 @@ def check_artnr(artikelnr: str):
 async def upload(
     file: UploadFile = File(...),
     artikelnr: str = Form(...),
+    bg_remove: str = Form("0"),
     background_tasks: BackgroundTasks = None,
 ):
     artikelnr = str(artikelnr).strip()
@@ -1680,6 +1764,9 @@ async def upload(
     _rebuild_csv_export()
 
     if background_tasks:
+        # optional image optimization (rembg) in parallel – doesn't block the operator
+        if str(bg_remove or "").strip() in ("1", "true", "True", "on", "yes"):
+            background_tasks.add_task(_optimize_one_image, out, "rembg")
         background_tasks.add_task(_run_meta_background, artikelnr, out)
 
     return {"ok": True, "filename": out.name}
@@ -1695,8 +1782,7 @@ def images(artikelnr: str):
 
     files = []
     for f in _list_image_paths(artikelnr):
-        rel = f.relative_to(BASE_DIR)
-        files.append("/static/" + str(rel).replace("\\", "/"))
+        files.append(_url_for_path(_best_image_path(f)))
 
     # cover-first ordering
     if cover:
@@ -1838,10 +1924,7 @@ def meta(artikelnr: str):
     mj = _load_meta_json(artikelnr)
 
     pics = _list_image_paths(artikelnr)
-    img_url = ""
-    if pics:
-        rel = pics[-1].relative_to(BASE_DIR)
-        img_url = "/static/" + str(rel).replace("\\", "/")
+    img_url = _url_for_path(_best_image_path(pics[-1])) if pics else ""
 
     return {
         "ok": True,
@@ -1852,13 +1935,23 @@ def meta(artikelnr: str):
         "retail_price": mj.get("retail_price", 0.0) or 0.0,
         "rufpreis": mj.get("rufpreis", 0.0) or 0.0,
         "lagerort": mj.get("lagerort", "") or "",
+        # add missing fields so edit-mode can fill everything correctly
+        "menge": int(mj.get("menge", 1) or 1),
+        "lagerstand": int(mj.get("lagerstand", 1) or 1),
+        "uebernehmen": int(mj.get("uebernehmen", 1) or 1),
+        "angeliefert": mj.get("angeliefert", "") or "",
+        "betriebsmittel": mj.get("betriebsmittel", "") or "",
         "sortiment": mj.get("sortiment", "") or "",
+        "sortiment_id": mj.get("sortiment_id", "") or "",
+        "sortiment_name": mj.get("sortiment_name", "") or "",
         "einlieferer": mj.get("einlieferer", "") or "",
+        "einlieferer_id": mj.get("einlieferer_id", "") or "",
         "mitarbeiter": mj.get("mitarbeiter", "") or "",
         "reviewed": bool(mj.get("reviewed", False)),
         "ki_source": mj.get("ki_source", "") or "",
         "ki_last_error": mj.get("ki_last_error", "") or "",
         "last_image": mj.get("last_image", "") or "",
+        "cover": mj.get("cover", "") or "",
         "image": img_url,
     }
 

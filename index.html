@@ -81,7 +81,7 @@
         <div class="text-xs md:text-sm text-white/80">BEI UNS BESTIMMST DU DEN PREIS!</div>
       </div>
     </div>
-    <div class="flex items-center gap-4 text-sm opacity-90"><a href="/admin" class="underline">Admin</a><a href="/admin#artikel" class="underline">Artikel</a></div>
+    <div class="flex items-center gap-4 text-sm opacity-90"><a href="/admin" class="underline">Admin</a></div>
   </header>
 
   <main class="glass rounded-3xl p-4 md:p-6 shadow-xl">
@@ -141,6 +141,14 @@
             <div class="sm:col-span-2">
               <label class="block mb-1 text-xs opacity-80">Betriebsmittel</label>
               <input id="s-betriebsmittel" type="text" class="input" placeholder="Rollwagen X…">
+            </div>
+
+            <div class="sm:col-span-2">
+              <label class="inline-flex items-center gap-2 text-xs opacity-90">
+                <input id="s-bgremove-clothing" type="checkbox" class="accent-white">
+                Bekleidung: Bilder automatisch freistellen (im Hintergrund)
+              </label>
+              <div class="text-[11px] opacity-70 mt-1">Nur aktivieren, wenn es wirklich Bekleidung ist (sonst bleibt alles wie bisher).</div>
             </div>
           </div>
 
@@ -359,6 +367,7 @@ const btnDeleteArticle = document.getElementById('btn-delete-article');
   const sAngeliefert = document.getElementById('s-angeliefert');
   const sBetriebsmittel = document.getElementById('s-betriebsmittel');
   const sSortiment = document.getElementById('s-sortiment');
+  const sBgRemoveClothing = document.getElementById('s-bgremove-clothing');
   const btnSettingsSave = document.getElementById('btn-settings-save');
 
   function loadSettings(){
@@ -375,7 +384,8 @@ const btnDeleteArticle = document.getElementById('btn-delete-article');
         betriebsmittel: "",
         sortiment: "",
         price_system_enabled: true,
-        hide_listprice: false
+        hide_listprice: false,
+        bg_remove_clothing: false
       }, d || {});
     }catch(e){
       return {
@@ -388,7 +398,8 @@ const btnDeleteArticle = document.getElementById('btn-delete-article');
         betriebsmittel:"",
         sortiment:"",
         price_system_enabled:true,
-        hide_listprice:false
+        hide_listprice:false,
+        bg_remove_clothing:false
       };
     }
   }
@@ -404,6 +415,7 @@ const btnDeleteArticle = document.getElementById('btn-delete-article');
     if(s.angeliefert) parts.push("angel.: " + s.angeliefert);
     if(s.betriebsmittel) parts.push("BM: " + s.betriebsmittel);
     if(s.sortiment) parts.push("Sort: " + s.sortiment);
+    if(s.bg_remove_clothing===true) parts.push("Freistellen: AN");
     parts.push((s.price_system_enabled===false) ? "Preis: AUS" : "Preis: AN");
     return parts.join(" · ");
   }
@@ -417,6 +429,7 @@ const btnDeleteArticle = document.getElementById('btn-delete-article');
     sAngeliefert.value = s.angeliefert || "";
     sBetriebsmittel.value = s.betriebsmittel || "";
     if(sSortiment) sSortiment.value = s.sortiment || "";
+    if(sBgRemoveClothing) sBgRemoveClothing.checked = (s.bg_remove_clothing === true);
     settingsMini.textContent = "Einstellungen: " + settingsText(s);
     // Main-Feld Menge übernehmen
     try{ fMenge.value = String(s.menge ?? 1); }catch(e){}
@@ -437,7 +450,8 @@ const btnDeleteArticle = document.getElementById('btn-delete-article');
       sortiment: (sSortiment ? (sSortiment.value||"").trim() : (prev.sortiment||"")),
       // preserve flags explicitly (falls prev unvollständig ist)
       price_system_enabled: (prev.price_system_enabled !== false),
-      hide_listprice: (prev.hide_listprice === true)
+      hide_listprice: (prev.hide_listprice === true),
+      bg_remove_clothing: (sBgRemoveClothing ? (sBgRemoveClothing.checked === true) : (prev.bg_remove_clothing === true))
     };
   }
 
@@ -628,6 +642,35 @@ async function refreshRecent(){
     fRuf.value    = (j.rufpreis ?? "");
     applyPriceMode();
 
+    // Wichtig: beim Bearbeiten müssen Menge/Lagerort & Settings korrekt befüllt werden
+    try{ fMenge.value = String(j.menge ?? fMenge.value ?? 1); }catch(e){}
+    try{ fLager.value = String(j.lagerort ?? ""); }catch(e){}
+
+    // Edit-Modus: wenn Seite mit ?artikelnr=... geöffnet wurde, Einstellungen aus Meta übernehmen
+    try{
+      const qs = new URLSearchParams(location.search);
+      const isEdit = qs.has('artikelnr') && String(qs.get('artikelnr')||'').trim() === String(art);
+      if(isEdit){
+        if(sEinl) sEinl.value = String(j.einlieferer_id ?? sEinl.value ?? "");
+        if(sMit) sMit.value = String(j.mitarbeiter ?? sMit.value ?? "");
+        if(sLagerstand) sLagerstand.value = String(j.lagerstand ?? sLagerstand.value ?? 1);
+        if(sUebernehmen) sUebernehmen.value = String(j.uebernehmen ?? sUebernehmen.value ?? 1);
+        if(sAngeliefert) sAngeliefert.value = String(j.angeliefert ?? "");
+        if(sBetriebsmittel) sBetriebsmittel.value = String(j.betriebsmittel ?? "");
+        if(sSortiment){
+          // prefer ID if select uses IDs, else name
+          const sid = String(j.sortiment_id ?? "").trim();
+          if(sid && Array.from(sSortiment.options).some(o=> String(o.value)===sid)) sSortiment.value = sid;
+          else if(j.sortiment_name && Array.from(sSortiment.options).some(o=> String(o.value)===String(j.sortiment_name))) sSortiment.value = String(j.sortiment_name);
+          else if(j.sortiment && Array.from(sSortiment.options).some(o=> String(o.value)===String(j.sortiment))) sSortiment.value = String(j.sortiment);
+        }
+        // settings mini refresh
+        const cur = readSettingsFromUI();
+        saveSettings(cur);
+        applySettingsToUI();
+      }
+    }catch(e){}
+
     if(j.image){
       thumb.innerHTML = `<img src="${j.image}">`;
     }
@@ -648,6 +691,8 @@ async function refreshRecent(){
       const res = await fetch('/api/meta?artikelnr=' + encodeURIComponent(art));
       const j = await res.json();
       if(j.ok){
+        // show processed image as soon as it's ready (background optimization)
+        try{ if(j.image) thumb.innerHTML = `<img src="${j.image}">`; }catch(e){}
         if(j.ki_source === 'realtime'){
           fTitle.value = j.titel || "";
           fDesc.value  = j.beschreibung || "";
@@ -759,6 +804,10 @@ async function refreshRecent(){
     const fd = new FormData();
     fd.append('file', file);
     fd.append('artikelnr', art);
+    try{
+      const s = loadSettings();
+      fd.append('bg_remove', (s.bg_remove_clothing === true) ? '1' : '0');
+    }catch(e){}
 
     toast("Upload startet …");
     setPill(true, "Upload …");
