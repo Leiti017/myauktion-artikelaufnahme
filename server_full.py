@@ -82,16 +82,30 @@ EXPORT_CSV = EXPORT_DIR / "artikel_export.csv"
 # ----------------------------
 IMG_TARGET = (750, 750)
 
-REMBG_AVAILABLE = False
+# Lazy rembg loader (important on Render so the port binds immediately).
+# We only import/load the model when we actually process an image in the background.
+REMBG_AVAILABLE: Optional[bool] = None
 REMBG_SESSION = None
-try:
-    # rembg is optional (but recommended). If not installed, we just keep raw images.
-    from rembg import new_session, remove  # type: ignore
-    REMBG_SESSION = new_session("u2net")
-    REMBG_AVAILABLE = True
-except Exception as _e:
-    REMBG_AVAILABLE = False
-    REMBG_SESSION = None
+_REMBG_LOCK = threading.Lock()
+
+def _ensure_rembg_session() -> bool:
+    global REMBG_AVAILABLE, REMBG_SESSION
+    if REMBG_AVAILABLE is True and REMBG_SESSION is not None:
+        return True
+    if REMBG_AVAILABLE is False:
+        return False
+    with _REMBG_LOCK:
+        if REMBG_AVAILABLE is True and REMBG_SESSION is not None:
+            return True
+        try:
+            from rembg import new_session  # type: ignore
+            REMBG_SESSION = new_session("u2net")
+            REMBG_AVAILABLE = True
+            return True
+        except Exception:
+            REMBG_AVAILABLE = False
+            REMBG_SESSION = None
+            return False
 
 
 def _processed_path_for_raw(raw_path: Path) -> Path:
@@ -173,7 +187,7 @@ def _optimize_one_image(raw_path: Path, mode: str = "standard", sortiment_name: 
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Wenn rembg nicht da ist, machen wir nur Resize auf Weiß (kein Cutout)
-        if not REMBG_AVAILABLE:
+        if not _ensure_rembg_session():
             with Image.open(raw_path) as im:
                 im = ImageOps.exif_transpose(im).convert("RGB")
                 im = ImageOps.contain(im, IMG_TARGET)
@@ -190,6 +204,7 @@ def _optimize_one_image(raw_path: Path, mode: str = "standard", sortiment_name: 
             buf = io.BytesIO()
             im.save(buf, format="PNG")
             buf.seek(0)
+            from rembg import remove  # type: ignore
             cut = remove(buf.read(), session=REMBG_SESSION)
             fg = Image.open(io.BytesIO(cut)).convert("RGBA")
 
